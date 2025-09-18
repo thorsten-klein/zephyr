@@ -99,13 +99,18 @@ def find_build_dir(dir, guess=False, **kwargs):
         build_dir = dir
     else:
         cwd = os.getcwd()
-        default = config.get('build', 'dir-fmt', fallback=DEFAULT_BUILD_DIR)
-        default = _resolve_build_dir(default, guess, cwd, **kwargs)
-        log.dbg(f'config dir-fmt: {default}', level=log.VERBOSE_EXTREME)
-        if default and is_zephyr_build(default):
-            build_dir = default
+        default = DEFAULT_BUILD_DIR
+        dir_fmt = config.get('build', 'dir-fmt', fallback=None)
+        if dir_fmt:
+            log.dbg(f'config dir-fmt: {dir_fmt}', level=log.VERBOSE_EXTREME)
+            dir_fmt = _resolve_build_dir(default, guess, cwd, **kwargs)
+        
+        if dir_fmt and is_zephyr_build(dir_fmt):
+            build_dir = dir_fmt
         elif is_zephyr_build(cwd):
             build_dir = cwd
+        elif is_zephyr_build(default):
+            build_dir = default
         else:
             build_dir = default
     log.dbg(f'build dir: {build_dir}', level=log.VERBOSE_EXTREME)
