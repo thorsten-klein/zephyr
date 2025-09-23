@@ -450,7 +450,8 @@ class Build(Forceable):
                                    source_dir=source_dir, app=app)
         if not build_dir:
             self.die('Unable to determine a default build folder. Check '
-                    'your build.dir-fmt configuration option')
+                    'your build.dir-fmt and build.default-build-dirs '
+                    'configuration options')
 
         if os.path.exists(build_dir):
             if not os.path.isdir(build_dir):

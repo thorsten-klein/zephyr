@@ -17,7 +17,7 @@ from pathlib import Path
 import zcmake
 from west import log
 from west.configuration import config
-from west.util import escapes_directory
+from west.util import escapes_directory, west_topdir
 
 # Domains.py must be imported from the pylib directory, since
 # twister also uses the implementation
@@ -98,16 +98,35 @@ def find_build_dir(dir, guess=False, **kwargs):
     if dir:
         build_dir = dir
     else:
+        build_dir = None
         cwd = os.getcwd()
-        default = config.get('build', 'dir-fmt', fallback=DEFAULT_BUILD_DIR)
-        default = _resolve_build_dir(default, guess, cwd, **kwargs)
-        log.dbg(f'config dir-fmt: {default}', level=log.VERBOSE_EXTREME)
-        if default and is_zephyr_build(default):
-            build_dir = default
-        elif is_zephyr_build(cwd):
-            build_dir = cwd
-        else:
-            build_dir = default
+        default = DEFAULT_BUILD_DIR
+        dir_fmt = config.get('build', 'dir-fmt', fallback=None)
+        if dir_fmt:
+            log.dbg(f'config dir-fmt: {dir_fmt}', level=log.VERBOSE_EXTREME)
+            dir_fmt = _resolve_build_dir(dir_fmt, guess, cwd, **kwargs)
+            log.dbg(f"Check build_dir {dir_fmt}")
+            if is_zephyr_build(dir_fmt):
+                build_dir = dir_fmt
+        if not build_dir:
+            log.dbg(f"Check build_dir {cwd}")
+            if is_zephyr_build(cwd):
+                build_dir = cwd
+        if not build_dir:
+            custom_defaults = config.get('build', 'default_build_dirs', fallback=None)
+            if custom_defaults:
+                for custom_default in custom_defaults.split(":"):
+                    candidate = _resolve_build_dir(custom_default, guess=False, cwd=cwd, **kwargs)
+                    if candidate and is_zephyr_build(candidate):
+                        build_dir = candidate
+            log.dbg(f"Check build_dir {default}")
+            if is_zephyr_build(default):
+                build_dir = default
+        if not build_dir:
+            log.dbg(f"Check build_dir {default}")
+            if is_zephyr_build(default):
+                build_dir = default
+
     log.dbg(f'build dir: {build_dir}', level=log.VERBOSE_EXTREME)
     if build_dir:
         return os.path.abspath(build_dir)
