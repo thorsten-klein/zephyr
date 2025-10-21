@@ -740,13 +740,15 @@ def west_projects(manifest=None):
     try:
         if not manifest:
             manifest = Manifest.from_file()
+        manifest_path = manifest.path
+        ret = {'manifest_path': manifest_path}
         if version.parse(WestVersion) >= version.parse('0.9.0'):
             projects = [p for p in manifest.get_projects([])
                         if manifest.is_active(p)]
         else:
             projects = manifest.get_projects([])
-        manifest_path = manifest.path
-        return {'manifest_path': manifest_path, 'projects': projects}
+        ret['projects'] = projects
+        return ret
     except (ManifestImportFailed, MalformedManifest,
             ManifestVersionError, MalformedConfig) as e:
         sys.exit(f'ERROR: {e}')
@@ -773,6 +775,13 @@ def parse_modules(zephyr_base, manifest=None, west_projs=None, modules=None,
             if not extra_module:
                 continue
             extra_modules.extend(PurePosixPath(p) for p in extra_module.split(';'))
+
+        from west.manifest import Manifest
+        manifest_path = manifest.path if manifest else Manifest.from_file().path
+        with open(manifest_path) as manifest_file:
+            yml_config = yaml.safe_load(manifest_file)
+        yml_zephyr = yml_config.get('zephyr', {})
+        extra_modules += [Path(p).absolute() for p in yml_zephyr.get('extra-modules', [])]
 
     Module = namedtuple('Module', ['project', 'meta', 'depends'])
 
