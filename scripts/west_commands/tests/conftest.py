@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 '''Common fixtures for use testing the runner package.'''
+import os
+from pathlib import Path
 
 import pytest
 
@@ -27,3 +29,11 @@ def runner_config():
                         RC_KERNEL_HEX, RC_KERNEL_BIN, RC_KERNEL_MOT, None, FileType.OTHER,
                         gdb=RC_GDB, openocd=RC_OPENOCD,
                         openocd_search=RC_OPENOCD_SEARCH)
+
+
+@pytest.fixture(autouse=True)
+def tmpdir(tmpdir_factory):
+    # Fixture to ensure that the tests run in a tempdir
+    tmpdir = Path(tmpdir_factory.mktemp("test-configs"))
+    os.chdir(tmpdir)
+    yield
