@@ -44,6 +44,19 @@ mapping:
   name:
     required: false
     type: str
+  extra-modules:
+    required: false
+    type: map
+    mapping:
+      recursive:
+        required: false
+        type: bool
+        default: false
+      paths:
+        required: false
+        type: seq
+        sequence:
+          - type: str
   build:
     required: false
     type: map
@@ -216,22 +229,9 @@ def process_module(module):
     # The input is a module if zephyr/module.{yml,yaml} is a valid yaml file
     # or if both zephyr/CMakeLists.txt and zephyr/Kconfig are present.
 
-    for module_yml in [module_path / MODULE_YML_PATH,
-                       module_path / MODULE_YML_PATH.with_suffix('.yaml')]:
-        if Path(module_yml).is_file():
-            with Path(module_yml).open('r', encoding='utf-8') as f:
-                meta = yaml.load(f.read(), Loader=SafeLoader)
-
-            try:
-                pykwalify.core.Core(source_data=meta, schema_data=schema)\
-                    .validate()
-            except pykwalify.errors.SchemaError as e:
-                sys.exit('ERROR: Malformed "build" section in file: {}\n{}'
-                        .format(module_yml.as_posix(), e))
-
-            meta['name'] = meta.get('name', module_path.name)
-            meta['name-sanitized'] = re.sub('[^a-zA-Z0-9]', '_', meta['name'])
-            return meta
+    module_yml, meta = get_module_yml(module_path)
+    if module_yml:
+        return meta
 
     if Path(module_path.joinpath('zephyr/CMakeLists.txt')).is_file() and \
        Path(module_path.joinpath('zephyr/Kconfig')).is_file():
@@ -758,21 +758,90 @@ def west_projects(manifest=None):
     return None
 
 
+def get_extra_modules_from_module_yml(path: Path, recursive=False) -> list[Path]:
+    extra_modules = []
+
+    module_yml, meta = get_module_yml(path)
+    this_recursive=False
+    if module_yml:
+        yml_extra_modules = meta.get('extra-modules', {})
+        print(yml_extra_modules)
+        this_recursive = yml_extra_modules.get('recursive', False)
+        paths = yml_extra_modules.get('paths', None) or []
+        # paths are relative to current extra-module
+        extra_modules.extend(path / p for p in paths)
+        print(f"extra_modules {extra_modules}")
+
+    # a toplevel recursive=False should turn off completely
+    # a toplevel recursive=True should turn on for all modules, except one explicitly specifies recursive=False
+    recursive = recursive and this_recursive
+    
+    # get extra-modules recursively if specified
+    print(f"recursive {recursive}")
+    if recursive:
+        for extra_module in extra_modules:
+            if extra_module == path:
+                continue
+            yml_extra_modules = get_extra_modules_from_module_yml(extra_module, recursive)
+            extra_modules.extend(yml_extra_modules)
+
+    return extra_modules
+
+
+def get_module_yml(path: Path) -> '(Path | None, Any)':
+    supported_filenames = [
+        path / MODULE_YML_PATH,
+        path / MODULE_YML_PATH.with_suffix('.yaml')
+    ]
+    for module_yml in supported_filenames:
+        if Path(module_yml).is_file():
+            # parse yml file
+            print(f"Reading {module_yml}")
+            with Path(module_yml).open('r', encoding='utf-8') as f:
+                meta = yaml.load(f.read(), Loader=SafeLoader)
+
+            # validate against schema
+            try:
+                pykwalify.core.Core(source_data=meta, schema_data=schema).validate()
+            except pykwalify.errors.SchemaError as e:
+                sys.exit('ERROR: Malformed "build" section in file: {}\n{}'
+                        .format(module_yml.as_posix(), e))
+
+            # ensure that some yaml properties are set
+            meta['name'] = meta.get('name', path.name)
+            meta['name-sanitized'] = re.sub('[^a-zA-Z0-9]', '_', meta['name'])
+
+            return module_yml, meta
+    return None, None
+
+
 def parse_modules(zephyr_base, manifest=None, west_projs=None, modules=None,
                   extra_modules=None):
 
+    west_projs = west_projs or west_projects(manifest)
+
     if modules is None:
-        west_projs = west_projs or west_projects(manifest)
         modules = ([p.posixpath for p in west_projs['projects']]
                    if west_projs else [])
 
     if extra_modules is None:
         extra_modules = []
+
+        # extra-modules may be specified in env variables
         for var in ['EXTRA_ZEPHYR_MODULES', 'ZEPHYR_EXTRA_MODULES']:
             extra_module = os.environ.get(var, None)
             if not extra_module:
                 continue
             extra_modules.extend(PurePosixPath(p) for p in extra_module.split(';'))
+
+        # extra-modules may be specified in module.yml of extra-modules
+        for extra_module in extra_modules:
+            extra_modules.extend(get_extra_modules_from_module_yml(extra_module))
+
+        # extra-modules may be specified in module.yml of each west project
+        for west_proj in west_projs['projects']:
+            path = Path(west_proj.abspath)
+            extra_modules.extend(get_extra_modules_from_module_yml(path))
 
     Module = namedtuple('Module', ['project', 'meta', 'depends'])
 
