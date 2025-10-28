@@ -33,6 +33,7 @@ west build [-h] [-b BOARD[@REV]]] [-d BUILD_DIR]
            [--sysbuild | --no-sysbuild] [--domain DOMAIN]
            [--extra-conf FILE.conf]
            [--extra-dtc-overlay FILE.overlay]
+           [--cmake-defines VAR=value]
            [source_dir] -- [cmake_opt [cmake_opt ...]]
 '''
 
@@ -121,6 +122,8 @@ class Build(Forceable):
                            help='force a cmake run')
         group.add_argument('--cmake-only', action='store_true',
                            help="just run cmake; don't build (implies -c)")
+        group.add_argument('--cmake-defines', nargs='+',
+                           help="arguments being forwarded to cmake")
         group.add_argument('--domain', action='append',
                            help='''execute build tool (make or ninja) only for
                            given domain''')
@@ -195,7 +198,7 @@ class Build(Forceable):
                 self.die(
                     f"source directory specified twice:({source_dir} and {self.args.source_dir})")
             self.args.source_dir = source_dir
-        self.dbg(f'source_dir: {self.args.source_dir} cmake_opts: {self.args.cmake_opts}',
+        self.dbg(f'source_dir: {self.args.source_dir} cmake_opts: {self.args.cmake_defines or ""} {self.args.cmake_opts}',
                 level=Verbosity.DBG_EXTREME)
         self._sanity_precheck()
         self._setup_build_dir()
@@ -219,7 +222,8 @@ class Build(Forceable):
                 self.run_cmake = True
             else:
                 self._update_cache()
-                if (self.args.cmake or self.args.cmake_opts or
+                if (self.args.cmake or self.args.cmake_opts or 
+                        self.args.cmake_defines or
                         self.args.cmake_only or self.args.snippets or
                         self.args.shields or self.args.extra_conf_files or
                         self.args.extra_dtc_overlay_files):
@@ -262,7 +266,11 @@ class Build(Forceable):
             else:
                 self.die("test item path does not exist")
 
-        self._run_cmake(board, origin, self.args.cmake_opts)
+        # collect cmake args from --cmake-defines and arguments after --
+        cmake_args = [f'-D{d}' for d in (self.args.cmake_defines or [])]
+        cmake_args.extend(self.args.cmake_opts or [])
+
+        self._run_cmake(board, origin, cmake_args)
         if args.cmake_only:
             return
 
