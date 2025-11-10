@@ -24,6 +24,7 @@ LOG_MODULE_REGISTER(net_conn, CONFIG_NET_CONN_LOG_LEVEL);
 #include <zephyr/net/udp.h>
 #include <zephyr/net/ethernet.h>
 #include <zephyr/net/socketcan.h>
+#include <zephyr/net/socket_bshbus.h>
 
 #include "net_private.h"
 #include "icmpv6.h"
@@ -351,6 +352,10 @@ static int net_conn_change_local(struct net_conn *conn,
 			   local_addr->sa_family == AF_CAN) {
 			memcpy(&conn->local_addr, local_addr,
 			       sizeof(struct sockaddr_can));
+		} else if (IS_ENABLED(CONFIG_NET_SOCKETS_BSHBUS) &&
+			   local_addr->sa_family == AF_BSHBUS) {
+			memcpy(&conn->local_addr, local_addr,
+			       sizeof(struct sockaddr_bshbus));
 		} else if (IS_ENABLED(CONFIG_NET_SOCKETS_PACKET) &&
 			   local_addr->sa_family == AF_PACKET) {
 			memcpy(&conn->local_addr, local_addr,
@@ -870,6 +875,78 @@ enum net_verdict net_conn_can_input(struct net_pkt *pkt, uint8_t proto)
 	return NET_DROP;
 }
 #endif /* defined(CONFIG_NET_SOCKETS_CAN) */
+
+#if defined(CONFIG_NET_SOCKETS_BSHBUS)
+enum net_verdict net_conn_bshbus_input(struct net_pkt *pkt, uint8_t proto)
+{
+	struct net_conn *best_match = NULL;
+	struct net_conn *conn;
+	net_conn_cb_t cb = NULL;
+	void *user_data = NULL;
+
+	/* Only accept input with AF_BSHBUS family and BSHBUS_DBUS2 protocol. */
+	if (net_pkt_family(pkt) != AF_BSHBUS || proto != BSHBUS_DBUS2) {
+		return NET_DROP;
+	}
+
+	NET_DBG("Check %s receiver for packet %p family %d",
+		net_proto2str(net_pkt_family(pkt), proto), pkt,
+		net_pkt_family(pkt));
+
+	k_mutex_lock(&conn_lock, K_FOREVER);
+
+	SYS_SLIST_FOR_EACH_CONTAINER(&conn_used, conn, node) {
+		if (!is_iface_matching(conn, pkt)) {
+			continue; /* wrong interface */
+		}
+
+		if (conn->family != AF_BSHBUS) {
+			continue; /* wrong family */
+		}
+
+		if (conn->proto != BSHBUS_DBUS2) {
+			continue; /* wrong protocol */
+		}
+
+		best_match = conn;
+	}
+
+	if (best_match != NULL) {
+		cb = best_match->cb;
+		user_data = best_match->user_data;
+	}
+
+	k_mutex_unlock(&conn_lock);
+
+	if (cb != NULL) {
+		NET_DBG("[%p] match found cb %p ud %p rank 0x%02x", best_match, cb,
+			user_data, NET_CONN_RANK(best_match->flags));
+
+		if (cb(best_match, pkt, NULL, NULL, user_data) == NET_DROP) {
+			goto drop;
+		}
+
+		net_stats_update_per_proto_recv(net_pkt_iface(pkt), proto);
+
+		return NET_OK;
+	}
+
+	NET_DBG("No match found.");
+
+drop:
+	net_stats_update_per_proto_drop(net_pkt_iface(pkt), proto);
+
+	return NET_DROP;
+}
+#else
+enum net_verdict net_conn_bshbus_input(struct net_pkt *pkt, uint8_t proto)
+{
+	ARG_UNUSED(pkt);
+	ARG_UNUSED(proto);
+
+	return NET_DROP;
+}
+#endif /* defined(CONFIG_NET_SOCKETS_BSHBUS) */
 
 enum net_verdict net_conn_input(struct net_pkt *pkt,
 				union net_ip_header *ip_hdr,

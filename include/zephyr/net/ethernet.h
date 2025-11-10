@@ -65,6 +65,7 @@ struct net_eth_addr {
 #define NET_ETH_PTYPE_ARP		0x0806
 #define NET_ETH_PTYPE_CAN		0x000C /* CAN: Controller Area Network */
 #define NET_ETH_PTYPE_CANFD		0x000D /* CANFD: CAN flexible data rate*/
+#define NET_ETH_PTYPE_BSHBUS2	0x00F0 /* BSH Bus: D-Bus-2 */
 #define NET_ETH_PTYPE_EAPOL		0x888e
 #define NET_ETH_PTYPE_ECAT		0x88a4
 #define NET_ETH_PTYPE_HDLC		0x0019 /* HDLC frames (like in PPP) */
@@ -92,6 +93,9 @@ struct net_eth_addr {
 #endif
 #if !defined(ETH_P_CANFD)
 #define ETH_P_CANFD	NET_ETH_PTYPE_CANFD
+#endif
+#if !defined(ETH_P_BSHBUS2)
+#define ETH_P_BSHBUS2 NET_ETH_PTYPE_BSHBUS2
 #endif
 #if !defined(ETH_P_EAPOL)
 #define ETH_P_EAPOL	NET_ETH_PTYPE_EAPOL

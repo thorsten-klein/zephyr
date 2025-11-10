@@ -592,7 +592,8 @@ static inline sa_family_t net_context_get_family(struct net_context *context)
  * of the context.
  *
  * @param context Network context.
- * @param family Address family (AF_INET, AF_INET6, AF_PACKET, AF_CAN)
+ * @param family Address family (AF_INET, AF_INET6, AF_PACKET, AF_CAN,
+ * AF_BSHBUS)
  */
 static inline void net_context_set_family(struct net_context *context,
 					  sa_family_t family)
@@ -602,7 +603,7 @@ static inline void net_context_set_family(struct net_context *context,
 	NET_ASSERT(context);
 
 	if (family == AF_UNSPEC || family == AF_INET || family == AF_INET6 ||
-	    family == AF_PACKET || family == AF_CAN) {
+		family == AF_PACKET || family == AF_CAN || family == AF_BSHBUS) {
 		/* Family is in BIT(4), BIT(5) and BIT(6) */
 		flag = (uint8_t)(family << 3);
 	}

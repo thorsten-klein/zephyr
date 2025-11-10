@@ -1,0 +1,7 @@
+# Copyright (c) 2019 Alexander Wachter
+# SPDX-License-Identifier: Apache-2.0
+
+config NET_L2_BSHBUS_RAW
+	bool "BSH Bus RAW l2 layer"
+	help
+	  Add a BSH Bus L2 layer driver. This is the layer for SOCKET BSHBUS.

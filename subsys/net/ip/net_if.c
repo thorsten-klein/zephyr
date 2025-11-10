@@ -636,6 +636,9 @@ struct net_if *net_if_get_default(void)
 #if defined(CONFIG_NET_DEFAULT_IF_CANBUS_RAW)
 	iface = net_if_get_first_by_type(&NET_L2_GET_NAME(CANBUS_RAW));
 #endif
+#if defined(CONFIG_NET_DEFAULT_IF_BSHBUS_RAW)
+	iface = net_if_get_first_by_type(&NET_L2_GET_NAME(BSHBUS_RAW));
+#endif
 #if defined(CONFIG_NET_DEFAULT_IF_PPP)
 	iface = net_if_get_first_by_type(&NET_L2_GET_NAME(PPP));
 #endif
@@ -5732,6 +5735,10 @@ static void notify_iface_up(struct net_if *iface)
 	    IS_ENABLED(CONFIG_NET_SOCKETS_CAN) &&
 	    (net_if_l2(iface) == &NET_L2_GET_NAME(CANBUS_RAW)))	{
 		/* CAN does not require link address. */
+	} else if (IS_ENABLED(CONFIG_NET_L2_BSHBUS_RAW) &&
+	    IS_ENABLED(CONFIG_NET_SOCKETS_BSHBUS) &&
+	    (net_if_l2(iface) == &NET_L2_GET_NAME(BSHBUS_RAW))) {
+		/* BSH Bus does not require link address */
 	} else {
 		if (!net_if_is_offloaded(iface)) {
 			NET_ASSERT(net_if_get_link_addr(iface)->addr != NULL);

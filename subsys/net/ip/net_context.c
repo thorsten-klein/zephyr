@@ -29,6 +29,8 @@ LOG_MODULE_REGISTER(net_ctx, CONFIG_NET_CONTEXT_LOG_LEVEL);
 #include <zephyr/net/ethernet.h>
 #include <zephyr/net/socketcan.h>
 #include <zephyr/net/ieee802154.h>
+#include <zephyr/net/socket_bshbus.h>
+#include <zephyr/drivers/bshbus.h>
 
 #include "connection.h"
 #include "net_private.h"
@@ -509,6 +511,21 @@ static int net_context_check(sa_family_t family, enum net_sock_type type,
 		}
 		break;
 
+	case AF_BSHBUS:
+		if (!IS_ENABLED(CONFIG_NET_SOCKETS_BSHBUS)) {
+			NET_DBG("AF_BSHBUS disabled");
+			return -EPFNOSUPPORT;
+		}
+		if (type != SOCK_RAW) {
+			NET_DBG("AF_BSHBUS only supports RAW socket type.");
+			return -EPROTOTYPE;
+		}
+		if (proto != BSHBUS_DBUS2) {
+			NET_DBG("AF_BSHBUS only supports BSHBUS_DBUS2 protocol.");
+			return -EPROTOTYPE;
+		}
+		break;
+
 	default:
 		NET_DBG("Unknown address family %d", family);
 		return -EAFNOSUPPORT;
@@ -681,7 +698,8 @@ int net_context_unref(struct net_context *context)
 	if (context->conn_handler) {
 		if (IS_ENABLED(CONFIG_NET_TCP) || IS_ENABLED(CONFIG_NET_UDP) ||
 		    IS_ENABLED(CONFIG_NET_SOCKETS_CAN) ||
-		    IS_ENABLED(CONFIG_NET_SOCKETS_PACKET)) {
+		    IS_ENABLED(CONFIG_NET_SOCKETS_PACKET) ||
+			IS_ENABLED(CONFIG_NET_SOCKETS_BSHBUS)) {
 			net_conn_unregister(context->conn_handler);
 		}
 
@@ -816,6 +834,34 @@ static int bind_default(struct net_context *context)
 
 		return net_context_bind(context, (struct sockaddr *)&can_addr,
 					sizeof(can_addr));
+	}
+
+	if (IS_ENABLED(CONFIG_NET_SOCKETS_BSHBUS) && family == AF_BSHBUS) {
+		struct sockaddr_bshbus bshbus_addr;
+
+		if (context->iface >= 0) {
+			return 0;
+		} else {
+#if defined(CONFIG_NET_L2_BSHBUS_RAW)
+			struct net_if *iface;
+
+			iface = net_if_get_first_by_type(
+						&NET_L2_GET_NAME(BSHBUS_RAW));
+			if (!iface) {
+				return -ENOENT;
+			}
+
+			bshbus_addr.bshbus_ifindex = net_if_get_by_iface(iface);
+			context->iface = bshbus_addr.bshbus_ifindex;
+#else
+			return -ENOENT;
+#endif
+		}
+
+		bshbus_addr.bshbus_family = AF_BSHBUS;
+
+		return net_context_bind(context, (struct sockaddr *)&bshbus_addr,
+					sizeof(bshbus_addr));
 	}
 
 	return -EINVAL;
@@ -1196,6 +1242,53 @@ int net_context_bind(struct net_context *context, const struct sockaddr *addr,
 		NET_DBG("Context %p binding to %d iface[%d] %p",
 			context, net_context_get_proto(context),
 			can_addr->can_ifindex, iface);
+
+		k_mutex_unlock(&context->lock);
+
+		return 0;
+	}
+
+	if (IS_ENABLED(CONFIG_NET_SOCKETS_BSHBUS) && addr->sa_family == AF_BSHBUS) {
+		struct sockaddr_bshbus *bshbus_addr = (struct sockaddr_bshbus *)addr;
+		struct net_if *iface = NULL;
+
+		if (addrlen < sizeof(struct sockaddr_bshbus)) {
+			return -EINVAL;
+		}
+
+		if (bshbus_addr->bshbus_ifindex < 0) {
+			return -EINVAL;
+		}
+
+		iface = net_if_get_by_index(bshbus_addr->bshbus_ifindex);
+		if (!iface) {
+			NET_ERR("Cannot bind to interface index %d",
+				bshbus_addr->bshbus_ifindex);
+			return -EADDRNOTAVAIL;
+		}
+
+		if (IS_ENABLED(CONFIG_NET_OFFLOAD) &&
+		    net_if_is_ip_offloaded(iface)) {
+			net_context_set_iface(context, iface);
+
+			return net_offload_bind(iface,
+						context,
+						addr,
+						addrlen);
+		}
+
+		k_mutex_lock(&context->lock, K_FOREVER);
+
+		net_context_set_iface(context, iface);
+		net_context_set_family(context, AF_BSHBUS);
+
+		net_bshbus_ptr(&context->local)->bshbus_family = AF_BSHBUS;
+		net_bshbus_ptr(&context->local)->bshbus_ifindex =
+			bshbus_addr->bshbus_ifindex;
+
+		NET_DBG("Context %p binding to %d iface[%d] %p",
+			context, net_context_get_proto(context),
+			bshbus_addr->bshbus_ifindex, iface);
 
 		k_mutex_unlock(&context->lock);
 
@@ -2555,6 +2648,44 @@ static int context_sendto(struct net_context *context,
 				can_addr->can_ifindex);
 			return -EDESTADDRREQ;
 		}
+
+	} else if (IS_ENABLED(CONFIG_NET_SOCKETS_BSHBUS) && family == AF_BSHBUS) {
+		struct sockaddr_bshbus *bshbus_addr = (struct sockaddr_bshbus *)dst_addr;
+		if (msghdr) {
+			bshbus_addr = msghdr->msg_name;
+			addrlen = msghdr->msg_namelen;
+
+			if (!bshbus_addr) {
+				bshbus_addr = (struct sockaddr_bshbus *)
+							(&context->remote);
+				addrlen = sizeof(struct sockaddr_bshbus);
+			}
+
+			/* For sendmsg(), the dst_addr is NULL so set it here.
+			 */
+			dst_addr = (const struct sockaddr *)bshbus_addr;
+		}
+
+		if (addrlen < sizeof(struct sockaddr_bshbus)) {
+			return -EINVAL;
+		}
+
+		if (bshbus_addr->bshbus_ifindex < 0) {
+			/* The index should have been set in bind */
+			bshbus_addr->bshbus_ifindex =
+				net_bshbus_ptr(&context->local)->bshbus_ifindex;
+		}
+
+		if (bshbus_addr->bshbus_ifindex < 0) {
+			return -EDESTADDRREQ;
+		}
+
+		iface = net_if_get_by_index(bshbus_addr->bshbus_ifindex);
+		if (!iface) {
+			NET_ERR("Cannot bind to interface index %d",
+				bshbus_addr->bshbus_ifindex);
+			return -EDESTADDRREQ;
+		}
 	} else {
 		NET_DBG("Invalid protocol family %d", family);
 		return -EINVAL;
@@ -2709,6 +2840,15 @@ skip_alloc:
 		net_pkt_cursor_init(pkt);
 
 		ret = net_try_send_data(pkt, timeout);
+	} else if (IS_ENABLED(CONFIG_NET_SOCKETS_BSHBUS) && family == AF_BSHBUS) {
+		ret = context_write_data(pkt, buf, len, msghdr);
+		if (ret < 0) {
+			goto fail;
+		}
+
+		net_pkt_cursor_init(pkt);
+
+		ret = net_try_send_data(pkt, timeout);
 	} else {
 		NET_DBG("Unknown protocol while sending packet: %d",
 		net_context_get_proto(context));
@@ -2832,6 +2972,9 @@ int net_context_send(struct net_context *context,
 		goto unlock;
 	} else if (IS_ENABLED(CONFIG_NET_SOCKETS_CAN) &&
 		   net_context_get_family(context) == AF_CAN) {
+		addrlen = sizeof(struct sockaddr_can);
+	} else if (IS_ENABLED(CONFIG_NET_SOCKETS_BSHBUS) &&
+		net_context_get_family(context) == AF_BSHBUS) {
 		addrlen = sizeof(struct sockaddr_can);
 	} else {
 		addrlen = 0;
@@ -3181,6 +3324,23 @@ int net_context_recv(struct net_context *context,
 				 * The SocketCAN will dispatch the packet to
 				 * correct net_context listener.
 				 */
+				ret = 0;
+			}
+		} else if (IS_ENABLED(CONFIG_NET_SOCKETS_BSHBUS) &&
+			   family == AF_BSHBUS) {
+			struct sockaddr_bshbus local_addr = {
+				.bshbus_family = AF_BSHBUS,
+			};
+
+			ret = bind_default(context);
+			if (ret < 0) {
+				goto unlock;
+			}
+
+			ret = recv_raw(context, cb, timeout,
+				       (struct sockaddr *)&local_addr,
+				       user_data);
+			if (ret == -EALREADY) {
 				ret = 0;
 			}
 		} else {

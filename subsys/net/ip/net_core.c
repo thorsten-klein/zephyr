@@ -34,6 +34,8 @@ LOG_MODULE_REGISTER(net_core, CONFIG_NET_CORE_LOG_LEVEL);
 #include <zephyr/net/ethernet.h>
 #include <zephyr/net/capture.h>
 
+#include <zephyr/drivers/bshbus.h>
+
 #if defined(CONFIG_NET_LLDP)
 #include <zephyr/net/lldp.h>
 #endif
@@ -56,6 +58,7 @@ LOG_MODULE_REGISTER(net_core, CONFIG_NET_CORE_LOG_LEVEL);
 
 #include "packet_socket.h"
 #include "canbus_socket.h"
+#include "bshbus_socket.h"
 
 #include "connection.h"
 #include "udp_internal.h"
@@ -142,6 +145,8 @@ static inline enum net_verdict process_data(struct net_pkt *pkt,
 		return NET_DROP;
 	} else if (IS_ENABLED(CONFIG_NET_SOCKETS_CAN) && family == AF_CAN) {
 		return net_canbus_socket_input(pkt);
+	} else if (IS_ENABLED(CONFIG_NET_SOCKETS_BSHBUS) && family == AF_BSHBUS) {
+		return net_bshbus_socket_input(pkt);
 	}
 
 	NET_DBG("Unknown protocol family packet (0x%x)", family);
@@ -616,7 +621,8 @@ static inline void l3_init(void)
 	if (IS_ENABLED(CONFIG_NET_UDP) ||
 	    IS_ENABLED(CONFIG_NET_TCP) ||
 	    IS_ENABLED(CONFIG_NET_SOCKETS_PACKET) ||
-	    IS_ENABLED(CONFIG_NET_SOCKETS_CAN)) {
+	    IS_ENABLED(CONFIG_NET_SOCKETS_CAN) ||
+		IS_ENABLED(CONFIG_NET_SOCKETS_BSHBUS)) {
 		net_conn_init();
 	}
 

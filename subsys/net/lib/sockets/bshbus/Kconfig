@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+
+config NET_SOCKETS_BSHBUS
+	bool "Socket BSH Data Bus support [EXPERIMENTAL]"
+	select NET_BSHBUS
+	select NET_L2_BSHBUS_RAW
+	select NET_CONNECTION_SOCKETS
+	select EXPERIMENTAL
+	help
+	  The SocketBSHBUS is used for internal communication in BSH household
+	  appliances via BSH Data Bus.
+
+if NET_SOCKETS_BSHBUS
+
+choice NET_SOCKETS_BSHBUS_DBUS2_PROTO
+	prompt "BSH D-Bus-2 protocol layer"
+	default NET_SOCKETS_BSHBUS_DBUS2 if NET_SOCKETS_BSHBUS
+
+config NET_SOCKETS_BSHBUS_DBUS2
+	bool "D-Bus-2 protocol for SocketBSHBUS"
+
+config NET_SOCKETS_BSHBUS_DBUS2_DUMMY
+	bool "Testing protocol for SocketBSHBUS"
+
+endchoice
+
+config NET_SOCKETS_BSHBUS2_RECEIVERS
+	int "Maximum number of simultaneous D-Bus-2 SocketBSHBUS receivers"
+	default 1
+	depends on NET_SOCKETS_BSHBUS_DBUS2 || NET_SOCKETS_BSHBUS_DBUS2_DUMMY
+	help
+	  The value configures how many sockets can be registered to the
+	  SocketBSHBUS interface.
+
+endif # NET_SOCKETS_BSHBUS

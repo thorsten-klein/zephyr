@@ -221,6 +221,17 @@ enum net_verdict net_conn_raw_ip_input(struct net_pkt *pkt,
 enum net_verdict net_conn_can_input(struct net_pkt *pkt, uint8_t proto);
 
 /**
+ * @brief Called by net_core.c when a BSHBus packet is received.
+ *
+ * @param pkt Network packet holding received data
+ * @param proto Protocol for the connection
+ *
+ * @return NET_OK if the packet was consumed, NET_DROP if the packet parsing
+ * failed and the packet should be discarded.
+ */
+enum net_verdict net_conn_bshbus_input(struct net_pkt *pkt, uint8_t proto);
+
+/**
  * @brief Called by net_core.c when a network packet is received (after L4
  *        processing).
  *

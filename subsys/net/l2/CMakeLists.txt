@@ -35,3 +35,7 @@ endif()
 if(CONFIG_NET_L2_CANBUS_RAW)
   add_subdirectory(canbus)
 endif()
+
+if(CONFIG_NET_L2_BSHBUS_RAW)
+  add_subdirectory(bshbus)
+endif()

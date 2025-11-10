@@ -55,6 +55,8 @@ enum net_link_type {
 	NET_LINK_DUMMY,
 	/** CANBUS link address. */
 	NET_LINK_CANBUS_RAW,
+	/** BSHBus link address. */
+	NET_LINK_BSHBUS_RAW,
 } __packed;
 
 /**

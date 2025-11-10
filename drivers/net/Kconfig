@@ -241,6 +241,34 @@ config NET_CANBUS_INIT_PRIORITY
 endif # NET_CAN
 
 #
+# BSH Data Bus network driver options
+#
+menuconfig NET_BSHBUS
+	bool "BSH Bus (BSH D-Bus) network driver"
+	help
+	  Enable the BSH Bus network driver. This driver provides a network
+	  interface on top of the BSH Bus controller driver API.
+
+if NET_BSHBUS
+
+module = NET_BSHBUS
+module-dep = LOG
+module-str = Log level for BSH Bus network driver
+module-help = Sets log level BSH Bus network driver.
+source "subsys/net/Kconfig.template.log_config.net"
+
+config NET_BSHBUS_INIT_PRIORITY
+	int "BSH Bus network device init priority"
+	default 81
+	help
+	  BSH Bus network device initialization priority.
+
+	  The priority needs to be lower than the network stack and higher than the
+	  BSH Bus controller driver.
+
+endif # NET_BSHBUS
+
+#
 # Native simulator offloaded sockets
 #
 

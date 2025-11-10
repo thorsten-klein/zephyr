@@ -1,0 +1,47 @@
+# BSH Bus configuration options
+
+# Copyright (c) 2025 Wolfgang Birkner
+# SPDX-License-Identifier: Apache-2.0
+
+#
+# BSH Bus options
+#
+menuconfig BSHBUS
+	bool "BSH Bus support"
+	help
+	  BSH Bus is used in BSH household appliances for communication between
+	  electronic control units.
+
+if BSHBUS
+
+module = BSHBUS
+module-str = BSHBUS
+source "subsys/logging/Kconfig.template.log_config"
+
+config BSHBUS_INIT_PRIORITY
+	int "BSH Bus driver init priority"
+	default 80
+	help
+	  BSH Bus driver device initialization priority.
+
+config BSHBUS_SHELL
+	bool "BSH Bus shell"
+	depends on SHELL
+	select POLL
+	help
+	  Enable BSH Bus Shell for testing.
+
+
+#config CAN_QEMU_IFACE_NAME
+#	string "SocketCAN interface name for QEMU"#
+#	default ""
+#	depends on QEMU_TARGET
+#	help
+#	  The SocketCAN interface name for QEMU. This value, if set, is given as "if" parameter to
+#	  the "-object can-host-socketcan" qemu command line option. The CAN interface must be
+#	  configured before starting QEMU.
+
+source "drivers/bshbus/Kconfig.tidbus"
+source "drivers/bshbus/Kconfig.dummy"
+
+endif # BSHBUS

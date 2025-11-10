@@ -660,7 +660,7 @@ endif # NET_UDP
 
 config NET_MAX_CONN
 	int "How many network connections are supported"
-	depends on NET_UDP || NET_TCP || NET_SOCKETS_PACKET || NET_SOCKETS_CAN
+	depends on NET_UDP || NET_TCP || NET_SOCKETS_PACKET || NET_SOCKETS_CAN || NET_SOCKETS_BSHBUS
 	default 8 if NET_IPV6 && NET_IPV4
 	default 4
 	help
@@ -956,6 +956,10 @@ config NET_DEFAULT_IF_DUMMY
 config NET_DEFAULT_IF_CANBUS_RAW
 	bool "Socket CAN interface"
 	depends on NET_L2_CANBUS_RAW
+
+config NET_DEFAULT_IF_BSHBUS_RAW
+	bool "Socket BSHBus interface"
+	depends on NET_L2_BSHBUS_RAW
 
 config NET_DEFAULT_IF_PPP
 	bool "PPP interface"

@@ -91,6 +91,9 @@ what socket types are available:
 | AF_CAN       | SOCK_RAW    | CAN_RAW          | Enabled if :kconfig:option:`CONFIG_NET_SOCKETS_CAN` is set. |br|          |
 |              |             |                  | Allows to send and receive CAN packets.                                   |
 +--------------+-------------+------------------+---------------------------------------------------------------------------+
+| AF_BSHBUS    | SOCK_RAW    | BSHBUS_DBUS2     | Enabled if :kconfig:option:`CONFIG_NET_SOCKETS_BSHBUS` is set. |br|       |
+|              |             |                  | Allows to send and receive BSH D-Bus-2 packets.                           |
++--------------+-------------+------------------+---------------------------------------------------------------------------+
 
 See :zephyr:code-sample:`sockets-echo-server` and :zephyr:code-sample:`sockets-echo-client`
 sample applications to learn how to create a simple server or client BSD socket based

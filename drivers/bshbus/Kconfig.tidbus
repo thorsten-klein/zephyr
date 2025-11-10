@@ -1,0 +1,27 @@
+# TI BSH D-Bus configuration options
+
+# Copyright (c) 2025 Wolfgang Birkner
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig BSHBUS_TIDBUS
+	bool "TI BSH Bus Controller Support"
+	default n
+	select SPI
+	help
+	  Enable the TI BSH D-Bus module driver backend for BSH Bus communication.
+
+if BSHBUS_TIDBUS
+
+config BSHBUS_TIDBUS_THREAD_STACK_SIZE
+	int "Stack size for the TI BSH D-Bus interrupt thread"
+	default 4096
+	help
+	  Size of the stack used for the thread handling interrupts and dispatching callbacks.
+
+config BSHBUS_TIDBUS_THREAD_PRIO
+	int "Priority for the TI BSH D-Bus interrupt thread"
+	default 0
+	help
+	  Priority level for the thread handling interrupts and dispatching callbacks.
+
+endif # BSHBUS_TIDBUS

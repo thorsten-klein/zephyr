@@ -27,6 +27,10 @@ zephyr_library_sources_ifdef(CONFIG_NET_SOCKETS_OFFLOAD_DISPATCHER socket_dispat
 zephyr_library_sources_ifdef(CONFIG_NET_SOCKETS_OBJ_CORE           socket_obj_core.c)
 zephyr_library_sources_ifdef(CONFIG_NET_SOCKETS_SERVICE            sockets_service.c)
 
+if(CONFIG_NET_SOCKETS_BSHBUS)
+  add_subdirectory(bshbus)
+endif()
+
 if(CONFIG_NET_SOCKETS_NET_MGMT)
   zephyr_library_sources(sockets_net_mgmt.c)
   zephyr_library_include_directories(${ZEPHYR_BASE}/subsys/net/ip)
