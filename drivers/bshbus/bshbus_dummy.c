@@ -22,17 +22,24 @@ LOG_MODULE_REGISTER(dummy_bshbus, CONFIG_BSHBUS_LOG_LEVEL);
 
 #define DT_DRV_COMPAT dummy_bshbus
 
-struct dummy_bshbus_cb_data {
+struct dummy_bshbus_tx_data {
     void *user_data;
     bshbus_dbus2_tx_callback_t cb;
+    struct k_thread thread;
+    struct k_sem sem;
+    K_KERNEL_STACK_MEMBER(stack, CONFIG_BSHBUS_DUMMY_THREAD_STACK_SIZE);
+};
+
+struct dummy_bshbus_rx_data {
+    void *user_data;
+    bshbus_dbus2_rx_callback_t cb;
+    struct k_thread thread;
+    K_KERNEL_STACK_MEMBER(stack, CONFIG_BSHBUS_DUMMY_THREAD_STACK_SIZE);
 };
 
 struct dummy_bshbus_data {
-	struct k_thread int_thread;
-	struct k_sem int_sem;
-    struct dummy_bshbus_cb_data dbus2_tx_cb;
-
-	K_KERNEL_STACK_MEMBER(int_stack, CONFIG_BSHBUS_DUMMY_THREAD_STACK_SIZE);
+    struct dummy_bshbus_tx_data tx;
+    struct dummy_bshbus_rx_data rx;
 };
 
 struct dummy_bshbus_config {
@@ -70,17 +77,23 @@ int dummybbus_send(const struct device *dev, const struct bshbus_frame_dbus2_tx 
     LOG_DBG("\tmsg_id: %04x", tx->msg_id);
     LOG_DBG("\tdlen: %d", tx->dlen);
 
-    dummybbus_data->dbus2_tx_cb.cb = cb;
-    dummybbus_data->dbus2_tx_cb.user_data = user_data;
+    dummybbus_data->tx.user_data = user_data;
+    dummybbus_data->tx.cb = cb;
 
-    k_sem_give(&dummybbus_data->int_sem);
+    k_sem_give(&dummybbus_data->tx.sem);
 
     return 0;
 }
 
-int dummybbus_add_receiver(const struct device *dev)
+int dummybbus_add_receiver(const struct device *dev,
+            bshbus_dbus2_rx_callback_t cb, void *user_data)
 {
+    struct dummy_bshbus_data *dummybbus_data = dev->data;
+
     LOG_DBG("Add receiver to %s:", dev->name);
+
+    dummybbus_data->rx.user_data = user_data;
+    dummybbus_data->rx.cb = cb;
 
     return 0;
 }
@@ -92,7 +105,7 @@ int dummybbus_remove_receiver(const struct device *dev)
     return 0;
 }
 
-static void dummybbus_int_thread(void *p1, void *p2, void *p3)
+static void dummybbus_tx_thread(void *p1, void *p2, void *p3)
 {
 	ARG_UNUSED(p2);
 	ARG_UNUSED(p3);
@@ -100,15 +113,46 @@ static void dummybbus_int_thread(void *p1, void *p2, void *p3)
     const struct device *dev = p1;
 	struct dummy_bshbus_data *dummybbus_data = dev->data;
 
-    LOG_DBG("Thread started...");
+    LOG_DBG("TX Thread started...");
 
 	while (true) {
-		k_sem_take(&dummybbus_data->int_sem, K_FOREVER);
+		k_sem_take(&dummybbus_data->tx.sem, K_FOREVER);
 
-        LOG_DBG("%s woken up", dev->name);
+        LOG_DBG("%s TX woken up", dev->name);
 
-        if (dummybbus_data->dbus2_tx_cb.cb) {
-            dummybbus_data->dbus2_tx_cb.cb(dev, BSHBUS_FRAME_STATUS_VALID, dummybbus_data->dbus2_tx_cb.user_data);
+        if (dummybbus_data->tx.cb) {
+            dummybbus_data->tx.cb(dev, BSHBUS_FRAME_STATUS_VALID, dummybbus_data->tx.user_data);
+        }
+	}
+}
+
+static void dummybbus_rx_thread(void *p1, void *p2, void *p3)
+{
+	ARG_UNUSED(p2);
+	ARG_UNUSED(p3);
+
+    const struct device *dev = p1;
+	struct dummy_bshbus_data *dummybbus_data = dev->data;
+    struct bshbus_frame frame;
+    uint8_t data = 0;
+
+    LOG_DBG("RX thread started...");
+
+	while (true) {
+		k_sleep(K_SECONDS(5));
+
+        LOG_DBG("%s RX message received", dev->name);
+
+        bshbus_prepare_frame_dbus2_rx(&frame, 0xC0, 0xFCBF, sizeof(data), &data);
+
+        if (dummybbus_data->rx.cb) {
+            dummybbus_data->rx.cb(dev, &frame, dummybbus_data->rx.user_data);
+        }
+
+        if (data < UINT8_MAX) {
+            data++;
+        } else {
+            data = 0;
         }
 	}
 }
@@ -121,13 +165,19 @@ static int dummybbus_init(const struct device *dev)
     LOG_DBG("Calling init...");
 
     /* Initialize int_sem to 1 to ensure any pending IRQ is serviced */
-	k_sem_init(&dummybbus_data->int_sem, 1, 1);
+	k_sem_init(&dummybbus_data->tx.sem, 1, 1);
 
-	tid = k_thread_create(&dummybbus_data->int_thread, dummybbus_data->int_stack,
-			      K_KERNEL_STACK_SIZEOF(dummybbus_data->int_stack),
-			      dummybbus_int_thread, (void *)dev, NULL, NULL,
+	tid = k_thread_create(&dummybbus_data->tx.thread, dummybbus_data->tx.stack,
+			      K_KERNEL_STACK_SIZEOF(dummybbus_data->tx.stack),
+			      dummybbus_tx_thread, (void *)dev, NULL, NULL,
 			      CONFIG_BSHBUS_DUMMY_THREAD_PRIO, 0, K_NO_WAIT);
-	k_thread_name_set(tid, "dummybshbus");
+	k_thread_name_set(tid, "dummybshbus_tx");
+
+	tid = k_thread_create(&dummybbus_data->rx.thread, dummybbus_data->rx.stack,
+			      K_KERNEL_STACK_SIZEOF(dummybbus_data->rx.stack),
+			      dummybbus_rx_thread, (void *)dev, NULL, NULL,
+			      CONFIG_BSHBUS_DUMMY_THREAD_PRIO, 0, K_NO_WAIT);
+	k_thread_name_set(tid, "dummybshbus_rx");
 
     LOG_DBG("...init finished");
 

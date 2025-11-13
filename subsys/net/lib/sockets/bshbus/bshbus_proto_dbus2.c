@@ -27,7 +27,7 @@ static struct bshbus2_recv *get_empty_receiver(void)
 	return NULL;
 }
 
-static int check_id_ranges(uint16_t ids_count, struct bshbus2_msg_id_range *ids)
+static int check_id_ranges(uint16_t ids_count, struct bshbus_dbus2_msg_id_range *ids)
 {
 	int i;
 	int previous_id_order = -1;
@@ -48,9 +48,9 @@ static int check_id_ranges(uint16_t ids_count, struct bshbus2_msg_id_range *ids)
 }
 
 static bool is_msg_id_registered(uint16_t msg_id_high, uint16_t msg_id_low,
-		struct bshbus2_msg_id_ranges *ids)
+		struct bshbus_dbus2_msg_id_ranges *ids)
 {
-	struct bshbus2_msg_id_range *range;
+	struct bshbus_dbus2_msg_id_range *range;
 	uint64_t id_bit;
 	uint16_t cnt, id_order, msg_id;
 
@@ -80,7 +80,7 @@ static bool is_msg_id_registered(uint16_t msg_id_high, uint16_t msg_id_low,
 static bool is_receiver_attached(struct bshbus2_recv *receiver)
 {
 	int i;
-	struct bshbus2_msg_id_range *range;
+	struct bshbus_dbus2_msg_id_range *range;
 
 	for (i = 0; i < ARRAY_SIZE(receivers); i++) {
 	}

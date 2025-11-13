@@ -32,7 +32,7 @@ static inline enum net_verdict bshbus_recv(struct net_if *iface,
 static inline int bshbus_send(struct net_if *iface, struct net_pkt *pkt)
 {
 	const struct bshbus_api *api = net_if_get_device(iface)->api;
-	struct device *dev = net_if_get_device(iface);
+	const struct device *dev = net_if_get_device(iface);
 	int ret;
 
 	if (!api) {

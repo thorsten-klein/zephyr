@@ -15,9 +15,9 @@ extern "C" {
  * BSH D-Bus-2 session can register several message ID ranges. Register the
  * message ID twice is not possible.
  *
- * The message IDs are mapped to the structure bshbus2_msg_id_range. For
+ * The message IDs are mapped to the structure bshbus_dbus2_msg_id_range. For
  * example an entry for the message ID 0xFCB0 is represented with a single
- * range in the structure bshbus2_msg_id_ranges like this:
+ * range in the structure bshbus_dbus2_msg_id_ranges like this:
  *     id_order = 0xFCB0 / 64 = 1010
  *     id_mask = 1 << (0xFCB0 % 64) = 48
  */
@@ -32,13 +32,13 @@ extern "C" {
  */
 struct bshbus2_proto {
 	/** BSH D-Bus-2 message IDs. */
-	struct bshbus2_msg_id_ranges *ids;
+	struct bshbus_dbus2_msg_id_ranges *ids;
 };
 
 /**
  * @brief BSH D-Bus-2 message ID structure.
  */
-struct bshbus2_msg_id_range {
+struct bshbus_dbus2_msg_id_range {
 	/** Message ID order (0-1023). */
 	uint16_t id_order;
 	/** Bit mask for the particular message ID order. */
@@ -48,11 +48,11 @@ struct bshbus2_msg_id_range {
 /**
  * @brief BSH D-Bus-2 message ID range structure.
  */
-struct bshbus2_msg_id_ranges {
+struct bshbus_dbus2_msg_id_ranges {
 	/** Number of elements in the ranges array. */
 	uint16_t range_cnt;
 	/** Variable array of message ID ranges. */
-	struct bshbus2_msg_id_range *ranges;
+	struct bshbus_dbus2_msg_id_range *ranges;
 };
 
 /**
@@ -90,7 +90,12 @@ static inline uint16_t bshbus2_get_id_order(uint16_t msg_id)
  */
 static inline uint64_t bshbus2_get_id_bit(uint16_t msg_id)
 {
-	return (1 << (msg_id % BSHBUS2_IDS_PER_ORDER));
+	uint8_t bit_shift = msg_id % BSHBUS2_IDS_PER_ORDER;
+	uint64_t id_bit = 1;
+
+	id_bit = id_bit << bit_shift;
+
+	return id_bit;
 }
 
 /**

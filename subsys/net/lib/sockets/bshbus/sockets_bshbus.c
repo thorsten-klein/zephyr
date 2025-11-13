@@ -17,11 +17,24 @@ LOG_MODULE_REGISTER(net_sock_bshbus, CONFIG_NET_BSHBUS_LOG_LEVEL);
 
 #include <zephyr/drivers/bshbus.h> //TODO das muss nach socket_bshbus.h
 
+BUILD_ASSERT(CONFIG_HEAP_MEM_POOL_SIZE > 0);
+
+#if defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2) || \
+	defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2_DUMMY)
+struct bshbus_dbus2_recv {
+	struct bshbus_dbus2_msg_id_ranges ids;
+};
+#endif
+
 struct bshbus_recv {
 	struct net_if *iface;
 	struct net_context *ctx;
 	enum bshbus_proto_id proto_id;
 	void *proto_receiver;
+#if defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2) || \
+	defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2_DUMMY)
+	struct bshbus_dbus2_recv dbus2_recv;
+#endif
 };
 
 // Compile Zeit
@@ -111,6 +124,32 @@ static int zbshbus_socket(int family, int type, int proto)
 	return fd;
 }
 
+static bool is_msg_id_registered(uint16_t msg_id, struct bshbus_dbus2_msg_id_ranges *ids)
+{
+	struct bshbus_dbus2_msg_id_range *range;
+	uint64_t id_bit;
+	uint16_t cnt, id_order;
+
+	id_bit = bshbus2_get_id_bit(msg_id);
+	id_order = bshbus2_get_id_order(msg_id);
+
+	for (cnt = 0; cnt < ids->range_cnt; cnt++) {
+		range = &ids->ranges[cnt];
+		if (id_order == range->id_order && (id_bit & range->id_mask)) {
+			/* Entry found */
+			return true;
+		}
+		else if (id_order < range->id_order) {
+			/* Ranges are ordered by their ID order, quit searching if only higher
+			 * orders exist
+			 */
+			break;
+		}
+	}
+
+	return false;
+}
+
 static void zbshbus_received_cb(struct net_context *ctx, struct net_pkt *pkt,
 			     union net_ip_header *ip_hdr,
 			     union net_proto_header *proto_hdr,
@@ -119,20 +158,10 @@ static void zbshbus_received_cb(struct net_context *ctx, struct net_pkt *pkt,
 	struct bshbus_frame *frame = (struct bshbus_frame *)net_pkt_data(pkt);
 	int i;
 
-	switch (bshbus_frame_get_flag(frame)) {
-		case BSHBUS_FRAME_DBUS2_TX_IND:
-	LOG_DBG("unique_id: %d", bshbus_frame_to_dbus2_tx_ind(frame)->unique_id);
-	LOG_DBG("status: %x", bshbus_frame_to_dbus2_tx_ind(frame)->status);
-			break;
-		default:
-			LOG_ERR("Invalid frame format %d", bshbus_frame_get_flag(frame));
-			// TODO clena up
-			break;
-	}
+	ctx = NULL;
 
 	for (i = 0; i < ARRAY_SIZE(receivers); i++) {
-		if (!receivers[i].ctx ||
-		    receivers[i].iface != net_pkt_iface(pkt)) {
+		if (!receivers[i].ctx || receivers[i].iface != net_pkt_iface(pkt)) {
 			continue;
 		}
 
@@ -140,6 +169,15 @@ static void zbshbus_received_cb(struct net_context *ctx, struct net_pkt *pkt,
 			case BSHBUS_FRAME_DBUS2_TX_IND:
 				if (receivers[i].ctx == net_pkt_context(pkt)) {
 					LOG_DBG("Receiver for D-Bus-2 TX IND found");
+					ctx = receivers[i].ctx;
+					break;
+				}
+				break;
+			case BSHBUS_FRAME_DBUS2_RX:
+				if (is_msg_id_registered(bshbus_frame_to_dbus2_rx(frame)->msg_id, &receivers[i].dbus2_recv.ids)) {
+					LOG_DBG("Receiver for D-Bus-2 RX MSG found");
+					ctx = receivers[i].ctx;
+					break;
 				}
 				break;
 			default:
@@ -148,7 +186,11 @@ static void zbshbus_received_cb(struct net_context *ctx, struct net_pkt *pkt,
 				break;
 		}
 
-		ctx = receivers[i].ctx;
+		if (!ctx) {
+			LOG_ERR("No receiver found");
+			net_pkt_unref(pkt);
+			return;
+		}
 
 		/* To prevent the reader from missing the wake-up signal
 		 *  as described in commit 1184089 and implemented in sockets.c
@@ -212,9 +254,6 @@ static int zbshbus_bind_ctx(struct net_context *ctx, const struct sockaddr *addr
 		errno = -ret;
 		return -1;
 	}
-//TODO Remove
-receivers[0].ctx = ctx;
-receivers[0].iface = iface;
 
 	/* For BSH Bus socket, we expect to receive packets after call to bind().
 	 */
@@ -386,31 +425,105 @@ static int bshbus_sock_getsockopt_vmeth(void *obj, int level, int optname,
 	return zbshbus_getsockopt_ctx(obj, level, optname, optval, optlen);
 }
 
-static int zbshbus_setsockopt_ctx(struct net_context *ctx, int level, int optname,
-			       const void *optval, socklen_t optlen)
+static struct bshbus_recv *get_free_receiver(const struct net_context *ctx)
 {
-	return sock_fd_op_vtable.setsockopt(ctx, level, optname,
-					    optval, optlen);
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(receivers); i++) {
+		if (!receivers[i].iface && !receivers[i].ctx) {
+			return &receivers[i];
+		}
+	}
+
+	LOG_ERR("All receivers occupied");
+
+	return NULL;
 }
 
-static int bshbus_sock_setsockopt_vmeth(void *obj, int level, int optname,
-				     const void *optval, socklen_t optlen)
+static int check_id_ranges(uint16_t range_cnt, const struct bshbus_dbus2_msg_id_range *id_range)
+{
+	int i;
+	int previous_id_order = -1;
+
+	for (i = 0; i < range_cnt; i++) {
+		if (BSHBUS2_ID_MAX_ORDER < id_range[i].id_order) {
+			LOG_ERR("Message ID order %d exceeds the limit %d",
+					id_range[i].id_order, BSHBUS2_ID_MAX_ORDER);
+			return -EINVAL;
+		}
+		else if (previous_id_order >= id_range[i].id_order) {
+			LOG_ERR("Incorrect message ID order");
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
+static int bshbus2_add_receiver(struct net_context *ctx, int level, int optname,
+							const struct bshbus_dbus2_msg_id_range *id_range, socklen_t optlen)
+{
+	const struct bshbus_api *api;
+	const struct device *dev;
+	struct bshbus_recv *receiver;
+	uint16_t range_cnt;
+	int ret;
+
+	if (!id_range || optlen < sizeof(*id_range) || optlen % sizeof(*id_range)) {
+		LOG_ERR("Invalid ID ranges structure");
+		return -EINVAL;
+	}
+
+	range_cnt = optlen / sizeof(*id_range);
+	ret = check_id_ranges(range_cnt, id_range);
+	if (ret) {
+		return ret;
+	}
+/* TODO alte MSG IDs löschen */
+
+	receiver = get_free_receiver(ctx);
+	if (!receiver) {
+		return -EBUSY;
+	}
+
+	receiver->iface = net_context_get_iface(ctx);
+	receiver->ctx = ctx;
+	receiver->dbus2_recv.ids.ranges = k_malloc(optlen);
+	if (!receiver->dbus2_recv.ids.ranges) {
+		LOG_ERR("Not enough memory for the ID range\n");
+		return -ENOMEM;
+	}
+	memcpy(receiver->dbus2_recv.ids.ranges, id_range, optlen); //TODO speicher sollte allokiert werden
+	receiver->dbus2_recv.ids.range_cnt = range_cnt;
+
+	dev = net_if_get_device(receiver->iface);
+	api = dev->api;
+
+	ret = api->setsockopt(dev, ctx, level, optname, id_range, optlen);
+	if (ret) {
+		LOG_ERR("Adding D-Bus-2 receiver failed: %d", ret);
+		memset(receiver, 0, sizeof(*receiver));
+	}
+
+	return 0;
+}
+
+static int zbshbus_setsockopt_ctx(struct net_context *ctx, int level, int optname,
+			       const void *optval, socklen_t optlen)
 {
 	const struct bshbus_api *api;
 	struct net_if *iface;
 	const struct device *dev;
-	int ret;
 
 	if (level != SOL_BSHBUS_DBUS2) {
-		return zbshbus_setsockopt_ctx(obj, level, optname, optval, optlen);
+		return sock_fd_op_vtable.setsockopt(ctx, level, optname, optval, optlen);
 	}
 
 	if (optval == NULL) {
-		errno = EINVAL;
-		return -1;
+		return -EINVAL;
 	}
 
-	iface = net_context_get_iface(obj);
+	iface = net_context_get_iface(ctx);
 	dev = net_if_get_device(iface);
 	api = dev->api;
 
@@ -419,7 +532,23 @@ static int bshbus_sock_setsockopt_vmeth(void *obj, int level, int optname,
 		return -1;
 	}
 
-	return api->setsockopt(dev, obj, level, optname, optval, optlen);
+	switch (optname) {
+		case BSHBUS_DBUS2_RECEIVER:
+			return bshbus2_add_receiver(ctx, level, optname, optval, optlen);
+			break;
+		default:
+			LOG_ERR("Invalid option name %d", optname);
+			return -EINVAL;
+			break;
+	}
+
+	return -EINVAL;
+}
+
+static int bshbus_sock_setsockopt_vmeth(void *obj, int level, int optname,
+				     const void *optval, socklen_t optlen)
+{
+	return zbshbus_setsockopt_ctx(obj, level, optname, optval, optlen);
 }
 
 static int bshbus_close_socket(struct net_context *ctx)

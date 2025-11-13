@@ -17,7 +17,6 @@ int z_impl_bshbus_dbus2_send(const struct device *dev,
         bshbus_dbus2_tx_callback_t cb, void *user_data)
 {
 	const struct bshbus_driver_api *api = (const struct bshbus_driver_api *)dev->api;
-	uint32_t id_mask;
 
     LOG_DBG("Send request");
 

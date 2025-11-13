@@ -18,19 +18,8 @@ LOG_MODULE_REGISTER(net_bshbus, CONFIG_NET_BSHBUS_LOG_LEVEL);
 
 #define SEND_TIMEOUT K_MSEC(100)
 
-#if defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2) || \
-	defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2_DUMMY)
-struct bshbus_dbus2_recv {
-	struct bshbus2_msg_id_ranges *ids;
-};
-#endif
-
 struct net_bshbus_context {
 	struct net_if *iface;
-#if defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2) || \
-	defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2_DUMMY)
-	struct bshbus_dbus2_recv dbus2_receivers[CONFIG_NET_SOCKETS_BSHBUS2_RECEIVERS]
-#endif
 };
 
 struct net_bshbus_config {
@@ -39,34 +28,34 @@ struct net_bshbus_config {
 
 static void net_bshbus_close(const struct device *dev, int filter_id)
 {
-	const struct net_bus_config *cfg = dev->config;
+//	const struct net_bus_config *cfg = dev->config;
 
 //	can_remove_rx_filter(cfg->can_dev, filter_id);
 }
-/*
-static void net_bshbus_recv(const struct device *dev, struct bshbus_frame_dbus2_rx *dbus2_rx, void *user_data)
+
+static void net_bshbus_dbus2_recv(const struct device *dev, struct bshbus_frame *frame, void *user_data)
 {
 	struct net_bshbus_context *ctx = user_data;
 	struct net_pkt *pkt;
-	struct bshbus_frame frame;
 	int ret;
 
 	ARG_UNUSED(dev);
 
 	LOG_DBG("Received packet on interface %p", ctx->iface);
-	pkt = net_pkt_rx_alloc_with_buffer(ctx->iface,
-						sizeof(frame), AF_BSHBUS, 0,
+	LOG_DBG("\tdest_addr: %02x", bshbus_frame_to_dbus2_rx(frame)->dest_addr);
+	LOG_DBG("\tmsg_id: %04x", bshbus_frame_to_dbus2_rx(frame)->msg_id);
+	LOG_DBG("\tdlen: %d", bshbus_frame_to_dbus2_rx(frame)->dlen);
+
+	pkt = net_pkt_rx_alloc_with_buffer(ctx->iface, sizeof(*frame), AF_BSHBUS, 0,
 						K_NO_WAIT);
 	if (pkt == NULL) {
 		LOG_ERR("Failed to obtain net_pkt");
 		return;
 	}
 
-	bshbus_frame_set_flag(&frame, BSHBUS_FRAME_DBUS2_RX);
-	frame.rx.msg_id = 0x1234;
-	frame.rx.dlen = 2;
+	bshbus_frame_set_flag(frame, BSHBUS_FRAME_DBUS2_RX);
 
-	if (net_pkt_write(pkt, frame, sizeof(frame))) {
+	if (net_pkt_write(pkt, frame, sizeof(*frame))) {
 		LOG_ERR("Failed to append RX data");
 		net_pkt_unref(pkt);
 		return;
@@ -77,7 +66,7 @@ static void net_bshbus_recv(const struct device *dev, struct bshbus_frame_dbus2_
 		LOG_DBG("net_recv_data failed: %d", ret);
 		net_pkt_unref(pkt);
 	}
-} */
+}
 
 static void net_bshbus_dbus2_send_cb(const struct device *dev, uint16_t status,
 			void *user_data) //TODO könnte nach dbus2 specific
@@ -139,7 +128,7 @@ free_pkt:
 
 static int net_bshbus_dbus2_send(const struct device *dev, struct net_pkt *pkt) // TODO könnte nach dbus2 specific
 {
-	struct bshbus_frame *frame = (struct bshdbus_frame *)pkt->frags->data;
+	struct bshbus_frame *frame = (struct bshbus_frame *)pkt->frags->data;
 	struct net_pkt *cb_pkt;
 
 	cb_pkt = net_pkt_clone(pkt, K_NO_WAIT);
@@ -155,9 +144,7 @@ static int net_bshbus_dbus2_send(const struct device *dev, struct net_pkt *pkt) 
 	LOG_DBG("msg_id: %04x", bshbus_frame_to_dbus2_tx(frame)->msg_id);
 	LOG_DBG("dlen: %d", bshbus_frame_to_dbus2_tx(frame)->dlen);
 
-	return bshbus_dbus2_send(dev,
-				&frame->tx,
-				net_bshbus_dbus2_send_cb, cb_pkt);
+	return bshbus_dbus2_send(dev, &frame->tx, net_bshbus_dbus2_send_cb, cb_pkt);
 }
 
 static int net_bshbus_send(const struct device *dev, struct net_pkt *pkt)
@@ -216,95 +203,34 @@ static int net_bshbus_init(const struct device *dev)
 	return 0;
 }
 
-static int check_id_ranges(uint16_t ids_count, struct bshbus2_msg_id_range *ids)
-{
-	int i;
-	int previous_id_order = -1;
-
-	for (i = 0; i < ids_count; i++) {
-		if (BSHBUS2_ID_MAX_ORDER < ids[i].id_order) {
-			LOG_ERR("Message ID order %d exceeds the limit %d",
-					ids[ids_count].id_order, BSHBUS2_ID_MAX_ORDER);
-			return -EINVAL;
-		}
-		else if (previous_id_order >= ids[i].id_order) {
-			LOG_ERR("Incorrect message ID order");
-			return -EINVAL;
-		}
-	}
-
-	return 0;
-}
-/*
-static struct bshbus2_recv *get_empty_receiver(struct net_bshbus_context *ctx)
-{
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(ctx->dbus2_receivers); i++) {
-		if (!ctx->dbus2_receivers[i]) {
-			return &ctx->dbus2_receivers[i];
-		}
-	}
-
-	LOG_ERR("All receivers occupied");
-
-	return NULL;
-}
-
-static int bshbus2_register_receiver(struct net_bshbus_context *ctx, net_bshbus_recv, struct bshbus2_msg_id_ranges *ids)
-{
-	int ret;
-	struct bshbus_dbus2_recv *receiver;
-
-// TOOD struktur prüfen
-
-	ret = check_id_ranges(ids->range_cnt, ids->ranges);
-	if (ret) {
-		return ret;
-	}
-
-	receiver = get_empty_receiver(ctx);
-	if (!receiver) {
-		return -EBUSY;
-	}
-
-	*receiver = &receiver;
-
-	return 0;
-}
-
 static int net_bshbus_setsockopt(const struct device *dev, void *obj, int level,
 				 int optname, const void *optval, socklen_t optlen)
 {
 	const struct net_bshbus_config *cfg = dev->config;
-	struct net_bshbus_context *context = dev->data;
-	struct net_context *ctx = obj;
-	struct bshbus2_msg_id_ranges *ids;
-	int ret;
+	struct net_bshbus_context *ctx = dev->data;
 
-	if (level != SOL_BSHBUS_DBUS2 && optname != BSHBUS_DBUS2_RECEIVER) {
-		errno = EINVAL;
-		return -1;
+	if (level != SOL_BSHBUS_DBUS2) {
+		return -EINVAL;
 	}
 
-	__ASSERT_NO_MSG(optlen == sizeof(*ids));
-
-	ret = can_add_rx_filter(cfg->can_dev, net_canbus_recv, context, optval);
-	if (ret == -ENOSPC) {
-		errno = ENOSPC;
-		return -1;
+	switch (optname) {
+		case BSHBUS_DBUS2_RECEIVER:
+			return bshbus_dbus2_add_receiver(cfg->bshbus_dev, net_bshbus_dbus2_recv, ctx);
+			break;
+		default:
+			LOG_ERR("Invalid option name %d", optname);
+			return -EINVAL;
+			break;
 	}
 
-	net_context_set_can_filter_id(ctx, ret);
-
-	return 0;
-} */
+	return -EINVAL;
+}
 
 static struct bshbus_api net_bshbus_api = {
 	.iface_api.init = net_bshbus_iface_init,
 	.send = net_bshbus_send,
 	.close = net_bshbus_close,
-//	.setsockopt = net_bshbus_setsockopt,
+	.setsockopt = net_bshbus_setsockopt,
 };
 
 static struct net_bshbus_context net_bshbus_ctx;

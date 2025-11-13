@@ -117,7 +117,7 @@ struct bshbus_frame {
 #define BSHBUS_FRAME_DBUS2_RX BIT(0)
 
 /** Frame for transmission of a D-Bus-2 message. @see @ref bshbus_frame_dbus2_tx  */
-#define BSHBUS_FRAME_DBUS2_TX BIT(10)
+#define BSHBUS_FRAME_DBUS2_TX BIT(1)
 
 /** Frame for D-Bus-2 transmit indication. @see @ref bshbus_frame_dbus2_tx_ind */
 #define BSHBUS_FRAME_DBUS2_TX_IND BIT(2)
@@ -178,6 +178,25 @@ static inline void bshbus_prepare_frame_dbus2_tx_ind(struct bshbus_frame *frame,
 	bshbus_frame_to_dbus2_tx_ind(frame)->status = status;
 };
 
+static inline struct bshbus_frame_dbus2_rx
+		*bshbus_frame_to_dbus2_rx(struct bshbus_frame *frame)
+{
+	return &frame->rx;
+};
+
+static inline void bshbus_prepare_frame_dbus2_rx(struct bshbus_frame *frame,
+		   uint8_t dest_addr, uint16_t msg_id, uint8_t dlen,
+		   uint8_t *data)
+{
+	bshbus_frame_set_flag(frame, BSHBUS_FRAME_DBUS2_RX);
+
+	bshbus_frame_to_dbus2_rx(frame)->dest_addr = dest_addr;
+	bshbus_frame_to_dbus2_rx(frame)->msg_id = msg_id;
+	bshbus_frame_to_dbus2_rx(frame)->dlen = dlen;
+	memcpy(bshbus_frame_to_dbus2_rx(frame)->data, data,
+			bshbus_frame_to_dbus2_rx(frame)->dlen);
+};
+
 static inline bool bshbus_is_dbus2_tx_frame(struct bshbus_frame *frame)
 {
 	return (bshbus_frame_get_flag(frame) & BSHBUS_FRAME_DBUS2_TX ? true : false);
@@ -186,6 +205,11 @@ static inline bool bshbus_is_dbus2_tx_frame(struct bshbus_frame *frame)
 static inline bool bshbus_is_dbus2_tx_ind_frame(struct bshbus_frame *frame)
 {
 	return (bshbus_frame_get_flag(frame) & BSHBUS_FRAME_DBUS2_TX_IND ? true : false);
+}
+
+static inline bool bshbus_is_dbus2_rx_frame(struct bshbus_frame *frame)
+{
+	return (bshbus_frame_get_flag(frame) & BSHBUS_FRAME_DBUS2_RX ? true : false);
 }
 
 /**
@@ -197,6 +221,16 @@ static inline bool bshbus_is_dbus2_tx_ind_frame(struct bshbus_frame *frame)
  * @param user_data User data provided when the frame was sent.
  */
 typedef void (*bshbus_dbus2_tx_callback_t)(const struct device *dev, uint16_t status, void *user_data);
+
+/**
+ * @brief Defines the application callback handler function signature for receiving
+ *
+ * @param dev       Pointer to the device structure for the driver instance.
+ * @param frame     Received frame.
+ * @param user_data User data provided when the receiver was added.
+ */
+typedef void (*bshbus_dbus2_rx_callback_t)(const struct device *dev,
+				  struct bshbus_frame *frame, void *user_data);
 
 /**
  * @name BSH Bus frame flags
@@ -270,7 +304,8 @@ typedef int (*bshbus_dbus2_send_t)(const struct device *dev,
  * @brief Callback API upon adding a BSH D-Bus-2 receiver
  * See @a bshbus_dbus2_add_receiver() for argument description
  */
-typedef int (*bshbus_dbus2_add_receiver_t)(const struct device *dev);
+typedef int (*bshbus_dbus2_add_receiver_t)(const struct device *dev,
+			  bshbus_dbus2_rx_callback_t cb, void *user_data);
 
 /**
  * @brief Callback API upon removing a BSH D-Bus-2 receiver
@@ -339,6 +374,22 @@ static inline int z_impl_bshbus_start(const struct device *dev)
 	const struct bshbus_driver_api *api = (const struct bshbus_driver_api *)dev->api;
 
 	return api->start(dev);
+}
+
+__syscall int bshbus_dbus2_add_receiver(const struct device *dev,
+            bshbus_dbus2_rx_callback_t cb, void *user_data);
+
+static inline int z_impl_bshbus_dbus2_add_receiver(const struct device *dev,
+            bshbus_dbus2_rx_callback_t cb, void *user_data)
+{
+	const struct bshbus_driver_api *api = (const struct bshbus_driver_api *)dev->api;
+
+	if (api->dbus2_add_receiver) {
+		return api->dbus2_add_receiver(dev, cb, user_data);
+	}
+	else {
+		return 0;
+	}
 }
 
 /** TODO
