@@ -55,8 +55,8 @@ static bool is_msg_id_registered(uint16_t msg_id_high, uint16_t msg_id_low,
 	uint16_t cnt, id_order, msg_id;
 
 	msg_id = bshbus2_convert_to_msg_id(msg_id_high, msg_id_low);
-	id_bit = bshbus2_get_id_bit(msg_id);
-	id_order = bshbus2_get_id_order(msg_id);
+	id_bit = bshbus_dbus2_get_id_bit(msg_id);
+	id_order = bshbus_dbus2_get_id_order(msg_id);
 
 	for (cnt = 0; cnt < ids->range_cnt; cnt++) {
 		range = &ids->ranges[cnt];

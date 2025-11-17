@@ -92,8 +92,10 @@ int dummybbus_add_receiver(const struct device *dev,
 
     LOG_DBG("Add receiver to %s:", dev->name);
 
-    dummybbus_data->rx.user_data = user_data;
-    dummybbus_data->rx.cb = cb;
+    if (!dummybbus_data->rx.cb) {
+        dummybbus_data->rx.user_data = user_data;
+        dummybbus_data->rx.cb = cb;
+    }
 
     return 0;
 }

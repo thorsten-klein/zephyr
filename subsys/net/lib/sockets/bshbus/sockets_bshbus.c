@@ -21,9 +21,14 @@ BUILD_ASSERT(CONFIG_HEAP_MEM_POOL_SIZE > 0);
 
 #if defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2) || \
 	defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2_DUMMY)
-struct bshbus_dbus2_recv {
-	struct bshbus_dbus2_msg_id_ranges ids;
-};
+typedef struct bshbus_dbus2_recv {
+	/** Message ID order (0-1023). */
+	uint16_t id_order;
+	/** Bit mask for the particular message ID order. */
+	uint64_t id_mask;
+	/** Next object in linked list */
+	struct bshbus_dbus2_recv *next;
+} bshbus_dbus2_receiver;
 #endif
 
 struct bshbus_recv {
@@ -33,7 +38,7 @@ struct bshbus_recv {
 	void *proto_receiver;
 #if defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2) || \
 	defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2_DUMMY)
-	struct bshbus_dbus2_recv dbus2_recv;
+	struct bshbus_dbus2_recv *dbus2_recv;
 #endif
 };
 
@@ -56,6 +61,28 @@ static struct bshbus_recv receivers[BSHBUS_MAX_RECEIVERS];
 
 extern const struct socket_op_vtable sock_fd_op_vtable;
 static const struct socket_op_vtable bshbus_sock_fd_op_vtable;
+
+static inline uint64_t bshbus_dbus2_get_id_bit(uint16_t msg_id)
+{
+	uint8_t bit_shift = msg_id % BSHBUS2_IDS_PER_ORDER;
+	uint64_t id_bit = 1;
+
+	id_bit = id_bit << bit_shift;
+
+	return id_bit;
+}
+
+/**
+ * @brief Get the BSH D-Bus-2 message ID order for a message ID.
+ *
+ * @param msg_id BSH D-Bus-2 message ID
+ *
+ * @return BSH D-Bus-2 ID order
+ */
+static inline uint16_t bshbus_dbus2_get_id_order(uint16_t msg_id)
+{
+	return (msg_id / BSHBUS2_IDS_PER_ORDER);
+}
 
 static int unregister_bshbus_receiver(struct bshbus_recv *receiver)
 {
@@ -124,26 +151,28 @@ static int zbshbus_socket(int family, int type, int proto)
 	return fd;
 }
 
-static bool is_msg_id_registered(uint16_t msg_id, struct bshbus_dbus2_msg_id_ranges *ids)
+static bool dbus2_rx_check_deliver(uint16_t msg_id, struct bshbus_recv *receiver)
 {
-	struct bshbus_dbus2_msg_id_range *range;
+	struct bshbus_dbus2_recv *dbus2_recv;
 	uint64_t id_bit;
-	uint16_t cnt, id_order;
+	uint16_t id_order;
 
-	id_bit = bshbus2_get_id_bit(msg_id);
-	id_order = bshbus2_get_id_order(msg_id);
+	if (receiver) {
+		id_bit = bshbus_dbus2_get_id_bit(msg_id);
+		id_order = bshbus_dbus2_get_id_order(msg_id);
 
-	for (cnt = 0; cnt < ids->range_cnt; cnt++) {
-		range = &ids->ranges[cnt];
-		if (id_order == range->id_order && (id_bit & range->id_mask)) {
-			/* Entry found */
-			return true;
+		dbus2_recv = receiver->dbus2_recv;
+
+		/* Ranges are ordered by their ID order, quit searching if only higher
+		 * orders exist
+		 */
+		while (dbus2_recv && (dbus2_recv->id_order < id_order)) {
+			dbus2_recv = dbus2_recv->next;
 		}
-		else if (id_order < range->id_order) {
-			/* Ranges are ordered by their ID order, quit searching if only higher
-			 * orders exist
-			 */
-			break;
+
+		if (dbus2_recv && id_order == dbus2_recv->id_order && (id_bit & dbus2_recv->id_mask)) {
+			/* Receiver found */
+			return true;
 		}
 	}
 
@@ -174,7 +203,9 @@ static void zbshbus_received_cb(struct net_context *ctx, struct net_pkt *pkt,
 				}
 				break;
 			case BSHBUS_FRAME_DBUS2_RX:
-				if (is_msg_id_registered(bshbus_frame_to_dbus2_rx(frame)->msg_id, &receivers[i].dbus2_recv.ids)) {
+				if (dbus2_rx_check_deliver(bshbus_frame_to_dbus2_rx(frame)->msg_id,
+											&receivers[i]))
+				{
 					LOG_DBG("Receiver for D-Bus-2 RX MSG found");
 					ctx = receivers[i].ctx;
 					break;
@@ -425,10 +456,18 @@ static int bshbus_sock_getsockopt_vmeth(void *obj, int level, int optname,
 	return zbshbus_getsockopt_ctx(obj, level, optname, optval, optlen);
 }
 
-static struct bshbus_recv *get_free_receiver(const struct net_context *ctx)
+static struct bshbus_recv *get_receiver(const struct net_context *ctx)
 {
 	int i;
 
+	for (i = 0; i < ARRAY_SIZE(receivers); i++) {
+		if (receivers[i].iface && receivers[i].ctx == ctx) {
+			/* Receiver already exists, return it */
+			return &receivers[i];
+		}
+	}
+
+	/* Receiver has not been registered before, find an empty slot */
 	for (i = 0; i < ARRAY_SIZE(receivers); i++) {
 		if (!receivers[i].iface && !receivers[i].ctx) {
 			return &receivers[i];
@@ -440,24 +479,104 @@ static struct bshbus_recv *get_free_receiver(const struct net_context *ctx)
 	return NULL;
 }
 
-static int check_id_ranges(uint16_t range_cnt, const struct bshbus_dbus2_msg_id_range *id_range)
+static int create_dbus2_receiver_entry(struct bshbus_recv *receiver,
+			uint16_t id_order, uint64_t id_mask)
 {
-	int i;
-	int previous_id_order = -1;
+	struct bshbus_dbus2_recv *dbus2_recv = receiver->dbus2_recv;
+	struct bshbus_dbus2_recv *prev_dbus2_recv = NULL;
 
-	for (i = 0; i < range_cnt; i++) {
-		if (BSHBUS2_ID_MAX_ORDER < id_range[i].id_order) {
-			LOG_ERR("Message ID order %d exceeds the limit %d",
-					id_range[i].id_order, BSHBUS2_ID_MAX_ORDER);
-			return -EINVAL;
+	while (dbus2_recv && dbus2_recv->id_order < id_order) {
+		prev_dbus2_recv = dbus2_recv;
+		dbus2_recv = dbus2_recv->next;
+	}
+
+	if (dbus2_recv && dbus2_recv->id_order == id_order) {
+		/* Add message IDs to the already existing message ID order band */
+		dbus2_recv->id_mask |= id_mask;
+	}
+	else {
+		/* Create new receiver entry */
+		dbus2_recv = k_malloc(sizeof(*dbus2_recv));
+		if (!dbus2_recv) {
+			LOG_ERR("Not enough memory to create the receiver entry");
+			return -ENOMEM;
 		}
-		else if (previous_id_order >= id_range[i].id_order) {
-			LOG_ERR("Incorrect message ID order");
-			return -EINVAL;
+
+		if (prev_dbus2_recv) {
+			/* Merge entry into the list */
+			dbus2_recv->next = prev_dbus2_recv->next;
+			prev_dbus2_recv->next = dbus2_recv;
 		}
+		else {
+			/* First entry in the list */
+			dbus2_recv->next = receiver->dbus2_recv;
+			receiver->dbus2_recv = dbus2_recv;
+		}
+
+		dbus2_recv->id_order = id_order;
+		dbus2_recv->id_mask = id_mask;
 	}
 
 	return 0;
+}
+
+static int create_dbus2_receiver(struct bshbus_recv *receiver,
+			uint16_t msg_id_start, uint16_t msg_id_end)
+{
+	uint64_t id_mask, bit_val;
+	uint32_t range_cnt;
+	uint16_t id_order, id_order_start, id_order_end, id_bit;
+	int ret, bit;
+
+	id_order_start = bshbus_dbus2_get_id_order(msg_id_start);
+	id_order_end = bshbus_dbus2_get_id_order(msg_id_end);
+	range_cnt = id_order_end - id_order_start + 1;
+
+	for (uint16_t i = 0; i < range_cnt; i++) {
+		id_order = id_order_start + i;
+		id_mask = 0;
+		if (i == 0) {
+			/* first range */
+			id_order = id_order_start;
+			id_bit = bshbus_dbus2_get_id_bit(msg_id_start);
+
+			for (bit = 63; bit >= 0; bit--) {
+				bit_val = 1 << bit;
+				id_mask |= bit_val;
+				if (id_bit & bit_val) {
+					break;
+				}
+			}
+		}
+		else if (i == (range_cnt - 1)) {
+			/* last range */
+			id_order = id_order_end;
+			id_bit = bshbus_dbus2_get_id_bit(msg_id_end);
+
+			for (bit = 0; bit <= 63; bit++) {
+				bit_val = 1 << bit;
+				id_mask |= bit_val;
+				if (id_bit & bit_val) {
+					break;
+				}
+			}
+		}
+		else {
+			/* full range */
+			id_mask = UINT64_MAX;
+		}
+
+		ret = create_dbus2_receiver_entry(receiver, id_order, id_mask);
+		if (ret) {
+			goto free_msg_id_ranges;
+		}
+	}
+
+	return ret;
+
+free_msg_id_ranges:
+	/* TODO: Alle IDs wieder freigeben */
+	return ret;
 }
 
 static int bshbus2_add_receiver(struct net_context *ctx, int level, int optname,
@@ -466,35 +585,35 @@ static int bshbus2_add_receiver(struct net_context *ctx, int level, int optname,
 	const struct bshbus_api *api;
 	const struct device *dev;
 	struct bshbus_recv *receiver;
-	uint16_t range_cnt;
 	int ret;
-
-	if (!id_range || optlen < sizeof(*id_range) || optlen % sizeof(*id_range)) {
-		LOG_ERR("Invalid ID ranges structure");
+	if (!id_range || optlen != sizeof(*id_range)) {
+		LOG_ERR("Invalid message ID range structure");
 		return -EINVAL;
 	}
 
-	range_cnt = optlen / sizeof(*id_range);
-	ret = check_id_ranges(range_cnt, id_range);
-	if (ret) {
-		return ret;
+	if (id_range->msg_id_start > id_range->msg_id_end) {
+		LOG_ERR("Invalid message ID range, start: %04x, end %04x\n",
+			id_range->msg_id_start, id_range->msg_id_end);
+			return -EINVAL;
 	}
-/* TODO alte MSG IDs löschen */
 
-	receiver = get_free_receiver(ctx);
+	/* TODO Pürfen ob Message ID frei ist */
+
+	receiver = get_receiver(ctx);
 	if (!receiver) {
 		return -EBUSY;
 	}
 
-	receiver->iface = net_context_get_iface(ctx);
-	receiver->ctx = ctx;
-	receiver->dbus2_recv.ids.ranges = k_malloc(optlen);
-	if (!receiver->dbus2_recv.ids.ranges) {
-		LOG_ERR("Not enough memory for the ID range\n");
-		return -ENOMEM;
+	ret = create_dbus2_receiver(receiver, id_range->msg_id_start, id_range->msg_id_end);
+	if (ret) {
+		LOG_ERR("Create receiver failed: %d", ret);
+		return ret;
 	}
-	memcpy(receiver->dbus2_recv.ids.ranges, id_range, optlen); //TODO speicher sollte allokiert werden
-	receiver->dbus2_recv.ids.range_cnt = range_cnt;
+
+	if (!receiver->ctx) {
+		receiver->iface = net_context_get_iface(ctx);
+		receiver->ctx = ctx;
+	}
 
 	dev = net_if_get_device(receiver->iface);
 	api = dev->api;
@@ -502,10 +621,10 @@ static int bshbus2_add_receiver(struct net_context *ctx, int level, int optname,
 	ret = api->setsockopt(dev, ctx, level, optname, id_range, optlen);
 	if (ret) {
 		LOG_ERR("Adding D-Bus-2 receiver failed: %d", ret);
-		memset(receiver, 0, sizeof(*receiver));
+		/* TODO clean up new receiver */
 	}
 
-	return 0;
+	return ret;
 }
 
 static int zbshbus_setsockopt_ctx(struct net_context *ctx, int level, int optname,

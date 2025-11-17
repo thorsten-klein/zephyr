@@ -39,10 +39,8 @@ struct bshbus2_proto {
  * @brief BSH D-Bus-2 message ID structure.
  */
 struct bshbus_dbus2_msg_id_range {
-	/** Message ID order (0-1023). */
-	uint16_t id_order;
-	/** Bit mask for the particular message ID order. */
-	uint64_t id_mask;
+	uint16_t msg_id_start;
+	uint16_t msg_id_end;
 };
 
 /**
@@ -67,35 +65,6 @@ static inline uint16_t bshbus2_convert_to_msg_id(uint8_t msg_id_high,
 		    uint8_t msg_id_low)
 {
 	return (msg_id_high << 8 | msg_id_low);
-}
-
-/**
- * @brief Get the BSH D-Bus-2 message ID order for a message ID.
- *
- * @param msg_id BSH D-Bus-2 message ID
- *
- * @return BSH D-Bus-2 ID order
- */
-static inline uint16_t bshbus2_get_id_order(uint16_t msg_id)
-{
-	return (msg_id / BSHBUS2_IDS_PER_ORDER);
-}
-
-/**
- * @brief Get the message ID mask bit for a BSH D-Bus-2 message ID.
- *
- * @param msg_id BSH D-Bus-2 message ID
- *
- * @return BSH D-Bus-2 ID mask bit
- */
-static inline uint64_t bshbus2_get_id_bit(uint16_t msg_id)
-{
-	uint8_t bit_shift = msg_id % BSHBUS2_IDS_PER_ORDER;
-	uint64_t id_bit = 1;
-
-	id_bit = id_bit << bit_shift;
-
-	return id_bit;
 }
 
 /**
