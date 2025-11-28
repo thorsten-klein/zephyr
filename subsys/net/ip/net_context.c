@@ -8,6 +8,7 @@
  * Copyright (c) 2016 Intel Corporation
  * Copyright (c) 2021 Nordic Semiconductor
  * Copyright (c) 2025 Aerlync Labs Inc.
+ * Copyright 2025 NXP
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -43,7 +44,7 @@ LOG_MODULE_REGISTER(net_ctx, CONFIG_NET_CONTEXT_LOG_LEVEL);
 #include "pmtu.h"
 
 #if defined(CONFIG_NET_TCP)
-#include "tcp.h"
+#include "tcp_internal.h"
 #endif
 
 #ifdef CONFIG_NET_INITIAL_MCAST_TTL
@@ -125,6 +126,17 @@ bool net_context_is_recv_pktinfo_set(struct net_context *context)
 {
 #if defined(CONFIG_NET_CONTEXT_RECV_PKTINFO)
 	return context->options.recv_pktinfo;
+#else
+	ARG_UNUSED(context);
+
+	return false;
+#endif
+}
+
+bool net_context_is_recv_hoplimit_set(struct net_context *context)
+{
+#if defined(CONFIG_NET_CONTEXT_RECV_HOPLIMIT)
+	return context->options.recv_hoplimit;
 #else
 	ARG_UNUSED(context);
 
@@ -655,7 +667,7 @@ int net_context_get(sa_family_t family, enum net_sock_type type, uint16_t proto,
 		    !net_if_is_ip_offloaded(net_if_get_default()) &&
 		    proto == IPPROTO_TCP) {
 			/* Free the TCP context that we allocated earlier */
-			net_tcp_put(&contexts[i]);
+			net_tcp_put(&contexts[i], false);
 		}
 
 		return ret;
@@ -741,7 +753,7 @@ int net_context_put(struct net_context *context)
 	context->send_cb = NULL;
 
 	/* net_tcp_put() will handle decrementing refcount on stack's behalf */
-	net_tcp_put(context);
+	net_tcp_put(context, false);
 
 	/* Decrement refcount on user app's behalf */
 	net_context_unref(context);
@@ -1317,8 +1329,6 @@ static inline struct net_context *find_context(void *conn_handler)
 
 int net_context_listen(struct net_context *context, int backlog)
 {
-	ARG_UNUSED(backlog);
-
 	NET_ASSERT(PART_OF_ARRAY(contexts, context));
 
 	if (!net_context_is_used(context)) {
@@ -1333,7 +1343,7 @@ int net_context_listen(struct net_context *context, int backlog)
 
 	k_mutex_lock(&context->lock, K_FOREVER);
 
-	if (net_tcp_listen(context) >= 0) {
+	if (net_tcp_listen(context, backlog) >= 0) {
 		k_mutex_unlock(&context->lock);
 		return 0;
 	}
@@ -1457,11 +1467,21 @@ int net_context_connect(struct net_context *context,
 		goto unlock;
 	}
 
+	/* As per POSIX, for non-connection-mode sockets:
+	 * "If the sa_family member of address is AF_UNSPEC, the socket's peer
+	 *  address shall be reset.""
+	 */
+	if (IS_ENABLED(CONFIG_NET_UDP) && addr->sa_family == AF_UNSPEC &&
+	    net_context_get_type(context) == SOCK_DGRAM) {
+		context->flags &= ~NET_CONTEXT_REMOTE_ADDR_SET;
+		memset(&context->remote, 0, sizeof(context->remote));
+		ret = 0;
+		goto unlock;
+	}
+
 	if (addr->sa_family != net_context_get_family(context)) {
-		NET_ASSERT(addr->sa_family == net_context_get_family(context),
-			   "Family mismatch %d should be %d",
-			   addr->sa_family,
-			   net_context_get_family(context));
+		NET_ERR("Address family %d does not match network context family %d",
+			addr->sa_family, net_context_get_family(context));
 		ret = -EINVAL;
 		goto unlock;
 	}
@@ -1664,7 +1684,7 @@ unlock:
 	return ret;
 }
 
-__maybe_unused static int get_bool_option(bool option, int *value, size_t *len)
+__maybe_unused static int get_bool_option(bool option, int *value, uint32_t *len)
 {
 	if (value == NULL) {
 		return -EINVAL;
@@ -1683,7 +1703,7 @@ __maybe_unused static int get_bool_option(bool option, int *value, size_t *len)
 	return 0;
 }
 
-__maybe_unused static int get_uint8_option(uint8_t option, uint8_t *value, size_t *len)
+__maybe_unused static int get_uint8_option(uint8_t option, uint8_t *value, uint32_t *len)
 {
 	if (value == NULL) {
 		return -EINVAL;
@@ -1698,7 +1718,7 @@ __maybe_unused static int get_uint8_option(uint8_t option, uint8_t *value, size_
 	return 0;
 }
 
-__maybe_unused static int get_uint16_option(uint16_t option, int *value, size_t *len)
+__maybe_unused static int get_uint16_option(uint16_t option, int *value, uint32_t *len)
 {
 	if (value == NULL) {
 		return -EINVAL;
@@ -1714,7 +1734,7 @@ __maybe_unused static int get_uint16_option(uint16_t option, int *value, size_t 
 }
 
 static int get_context_priority(struct net_context *context,
-				void *value, size_t *len)
+				void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_CONTEXT_PRIORITY)
 	return get_uint8_option(context->options.priority,
@@ -1729,7 +1749,7 @@ static int get_context_priority(struct net_context *context,
 }
 
 static int get_context_proxy(struct net_context *context,
-			     void *value, size_t *len)
+			     void *value, uint32_t *len)
 {
 #if defined(CONFIG_SOCKS)
 	struct sockaddr *addr = (struct sockaddr *)value;
@@ -1757,7 +1777,7 @@ static int get_context_proxy(struct net_context *context,
 }
 
 static int get_context_txtime(struct net_context *context,
-			      void *value, size_t *len)
+			      void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_CONTEXT_TXTIME)
 	return get_bool_option(context->options.txtime,
@@ -1772,7 +1792,7 @@ static int get_context_txtime(struct net_context *context,
 }
 
 static int get_context_rcvtimeo(struct net_context *context,
-				void *value, size_t *len)
+				void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_CONTEXT_RCVTIMEO)
 	*((k_timeout_t *)value) = context->options.rcvtimeo;
@@ -1792,7 +1812,7 @@ static int get_context_rcvtimeo(struct net_context *context,
 }
 
 static int get_context_sndtimeo(struct net_context *context,
-				void *value, size_t *len)
+				void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_CONTEXT_SNDTIMEO)
 	*((k_timeout_t *)value) = context->options.sndtimeo;
@@ -1812,7 +1832,7 @@ static int get_context_sndtimeo(struct net_context *context,
 }
 
 static int get_context_rcvbuf(struct net_context *context,
-			      void *value, size_t *len)
+			      void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_CONTEXT_RCVBUF)
 	return get_uint16_option(context->options.rcvbuf,
@@ -1827,7 +1847,7 @@ static int get_context_rcvbuf(struct net_context *context,
 }
 
 static int get_context_sndbuf(struct net_context *context,
-				void *value, size_t *len)
+				void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_CONTEXT_SNDBUF)
 	return get_uint16_option(context->options.sndbuf,
@@ -1842,7 +1862,7 @@ static int get_context_sndbuf(struct net_context *context,
 }
 
 static int get_context_dscp_ecn(struct net_context *context,
-				void *value, size_t *len)
+				void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_CONTEXT_DSCP_ECN)
 	return get_uint8_option(context->options.dscp_ecn,
@@ -1857,7 +1877,7 @@ static int get_context_dscp_ecn(struct net_context *context,
 }
 
 static int get_context_ttl(struct net_context *context,
-				 void *value, size_t *len)
+				 void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_IPV4)
 	*((int *)value) = context->ipv4_ttl;
@@ -1877,7 +1897,7 @@ static int get_context_ttl(struct net_context *context,
 }
 
 static int get_context_mcast_ttl(struct net_context *context,
-				 void *value, size_t *len)
+				 void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_IPV4)
 	*((int *)value) = context->ipv4_mcast_ttl;
@@ -1897,7 +1917,7 @@ static int get_context_mcast_ttl(struct net_context *context,
 }
 
 static int get_context_ipv4_mcast_loop(struct net_context *context,
-				  void *value, size_t *len)
+				  void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_IPV4)
 	return get_bool_option(context->options.ipv4_mcast_loop, value, len);
@@ -1910,7 +1930,7 @@ static int get_context_ipv4_mcast_loop(struct net_context *context,
 }
 
 static int get_context_mcast_hop_limit(struct net_context *context,
-				       void *value, size_t *len)
+				       void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_IPV6)
 	*((int *)value) = context->ipv6_mcast_hop_limit;
@@ -1930,7 +1950,7 @@ static int get_context_mcast_hop_limit(struct net_context *context,
 }
 
 static int get_context_unicast_hop_limit(struct net_context *context,
-					 void *value, size_t *len)
+					 void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_IPV6)
 	*((int *)value) = context->ipv6_hop_limit;
@@ -1950,7 +1970,7 @@ static int get_context_unicast_hop_limit(struct net_context *context,
 }
 
 static int get_context_reuseaddr(struct net_context *context,
-				 void *value, size_t *len)
+				 void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_CONTEXT_REUSEADDR)
 	return get_bool_option(context->options.reuseaddr,
@@ -1965,7 +1985,7 @@ static int get_context_reuseaddr(struct net_context *context,
 }
 
 static int get_context_reuseport(struct net_context *context,
-				void *value, size_t *len)
+				void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_CONTEXT_REUSEPORT)
 	return get_bool_option(context->options.reuseport,
@@ -1980,7 +2000,7 @@ static int get_context_reuseport(struct net_context *context,
 }
 
 static int get_context_ipv6_v6only(struct net_context *context,
-				   void *value, size_t *len)
+				   void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_IPV4_MAPPING_TO_IPV6)
 	return get_bool_option(context->options.ipv6_v6only,
@@ -1995,7 +2015,7 @@ static int get_context_ipv6_v6only(struct net_context *context,
 }
 
 static int get_context_recv_pktinfo(struct net_context *context,
-				    void *value, size_t *len)
+				    void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_CONTEXT_RECV_PKTINFO)
 	return get_bool_option(context->options.recv_pktinfo,
@@ -2009,8 +2029,23 @@ static int get_context_recv_pktinfo(struct net_context *context,
 #endif
 }
 
+static int get_context_recv_hoplimit(struct net_context *context,
+				    void *value, uint32_t *len)
+{
+#if defined(CONFIG_NET_CONTEXT_RECV_HOPLIMIT)
+	return get_bool_option(context->options.recv_hoplimit,
+			       value, len);
+#else
+	ARG_UNUSED(context);
+	ARG_UNUSED(value);
+	ARG_UNUSED(len);
+
+	return -ENOTSUP;
+#endif
+}
+
 static int get_context_addr_preferences(struct net_context *context,
-					void *value, size_t *len)
+					void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_IPV6)
 	return get_uint16_option(context->options.addr_preferences,
@@ -2025,7 +2060,7 @@ static int get_context_addr_preferences(struct net_context *context,
 }
 
 static int get_context_timestamping(struct net_context *context,
-				    void *value, size_t *len)
+				    void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_CONTEXT_TIMESTAMPING)
 	*((uint8_t *)value) = context->options.timestamping;
@@ -2045,7 +2080,7 @@ static int get_context_timestamping(struct net_context *context,
 }
 
 static int get_context_mtu(struct net_context *context,
-			   void *value, size_t *len)
+			   void *value, uint32_t *len)
 {
 	sa_family_t family = net_context_get_family(context);
 	struct net_if *iface = NULL;
@@ -2087,7 +2122,7 @@ out:
 }
 
 static int get_context_mcast_ifindex(struct net_context *context,
-				     void *value, size_t *len)
+				     void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_IPV6) || defined(CONFIG_NET_IPV4)
 	sa_family_t family = net_context_get_family(context);
@@ -2145,7 +2180,7 @@ static int get_context_mcast_ifindex(struct net_context *context,
 }
 
 static int get_context_local_port_range(struct net_context *context,
-					void *value, size_t *len)
+					void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_CONTEXT_CLAMP_PORT_RANGE)
 	if (len == NULL || *len != sizeof(uint32_t)) {
@@ -2165,7 +2200,7 @@ static int get_context_local_port_range(struct net_context *context,
 }
 
 static int get_context_ipv6_mcast_loop(struct net_context *context,
-				       void *value, size_t *len)
+				       void *value, uint32_t *len)
 {
 #if defined(CONFIG_NET_IPV6)
 	return get_bool_option(context->options.ipv6_mcast_loop, value, len);
@@ -2395,6 +2430,46 @@ static void set_pkt_txtime(struct net_pkt *pkt, const struct msghdr *msghdr)
 	}
 }
 
+static void set_pkt_hoplimit(struct net_pkt *pkt, const struct msghdr *msg_hdr)
+{
+	struct cmsghdr *cmsg;
+	const struct sockaddr_in6 *addr6 = NULL;
+
+	if (IS_ENABLED(CONFIG_NET_IPV4_MAPPING_TO_IPV6) && IS_ENABLED(CONFIG_NET_IPV6)) {
+		addr6 = msg_hdr->msg_name;
+	}
+
+	for (cmsg = CMSG_FIRSTHDR(msg_hdr); cmsg != NULL;
+	     cmsg = CMSG_NXTHDR(msg_hdr, cmsg)) {
+		if (net_pkt_family(pkt) == AF_INET6) {
+			if (cmsg->cmsg_len == CMSG_LEN(sizeof(int)) &&
+			    cmsg->cmsg_level == IPPROTO_IPV6 &&
+			    cmsg->cmsg_type == IPV6_HOPLIMIT) {
+				net_pkt_set_ipv6_hop_limit(pkt, *(uint8_t *)CMSG_DATA(cmsg));
+				break;
+			}
+		} else if (net_pkt_family(pkt) == AF_INET) {
+			if (addr6  == NULL ||
+			    (addr6 != NULL && !net_ipv6_addr_is_v4_mapped(&addr6->sin6_addr))) {
+				if (cmsg->cmsg_len == CMSG_LEN(sizeof(int)) &&
+				    cmsg->cmsg_level == IPPROTO_IP &&
+				    cmsg->cmsg_type == IP_TTL) {
+					net_pkt_set_ipv4_ttl(pkt, *(uint8_t *)CMSG_DATA(cmsg));
+					break;
+				}
+			} else if (addr6 != NULL &&
+				   net_ipv6_addr_is_v4_mapped(&addr6->sin6_addr)) {
+				if (cmsg->cmsg_len == CMSG_LEN(sizeof(int)) &&
+				    cmsg->cmsg_level == IPPROTO_IPV6 &&
+				    cmsg->cmsg_type == IPV6_HOPLIMIT) {
+					net_pkt_set_ipv4_ttl(pkt, *(uint8_t *)CMSG_DATA(cmsg));
+					break;
+				}
+			}
+		}
+	}
+}
+
 static int context_sendto(struct net_context *context,
 			  const void *buf,
 			  size_t len,
@@ -2433,9 +2508,20 @@ static int context_sendto(struct net_context *context,
 	 */
 	if (IS_ENABLED(CONFIG_NET_IPV4_MAPPING_TO_IPV6) &&
 	    IS_ENABLED(CONFIG_NET_IPV6) &&
-	    net_context_get_family(context) == AF_INET6 &&
-	    dst_addr->sa_family == AF_INET) {
-		family = AF_INET;
+	    net_context_get_family(context) == AF_INET6) {
+		const struct sockaddr_in6 *addr6 = NULL;
+
+		if (dst_addr != NULL) {
+			addr6 = (const struct sockaddr_in6 *)dst_addr;
+		} else if (msghdr != NULL) {
+			addr6 = msghdr->msg_name;
+		}
+
+		if (addr6 != NULL && net_ipv6_addr_is_v4_mapped(&addr6->sin6_addr)) {
+			family = AF_INET;
+		} else {
+			family = net_context_get_family(context);
+		}
 	} else {
 		family = net_context_get_family(context);
 	}
@@ -2522,6 +2608,10 @@ static int context_sendto(struct net_context *context,
 			net_ipaddr_copy(&mapped.sin_addr,
 					(struct in_addr *)(&addr6->sin6_addr.s6_addr32[3]));
 			addr4 = &mapped;
+
+			/* For sendmsg(), the dst_addr is NULL so set it here.
+			 */
+			dst_addr = (const struct sockaddr *)addr4;
 		}
 
 		if (addrlen < sizeof(struct sockaddr_in)) {
@@ -2751,6 +2841,9 @@ static int context_sendto(struct net_context *context,
 				set_pkt_txtime(pkt, msghdr);
 			}
 		}
+
+		set_pkt_hoplimit(pkt, msghdr);
+
 	}
 
 skip_alloc:
@@ -3395,7 +3488,7 @@ int net_context_update_recv_wnd(struct net_context *context,
 	return ret;
 }
 
-__maybe_unused static int set_bool_option(bool *option, const void *value, size_t len)
+__maybe_unused static int set_bool_option(bool *option, const void *value, uint32_t len)
 {
 	if (value == NULL) {
 		return -EINVAL;
@@ -3410,7 +3503,7 @@ __maybe_unused static int set_bool_option(bool *option, const void *value, size_
 	return 0;
 }
 
-__maybe_unused static int set_uint8_option(uint8_t *option, const void *value, size_t len)
+__maybe_unused static int set_uint8_option(uint8_t *option, const void *value, uint32_t len)
 {
 	if (value == NULL) {
 		return -EINVAL;
@@ -3425,7 +3518,7 @@ __maybe_unused static int set_uint8_option(uint8_t *option, const void *value, s
 	return 0;
 }
 
-__maybe_unused static int set_uint16_option(uint16_t *option, const void *value, size_t len)
+__maybe_unused static int set_uint16_option(uint16_t *option, const void *value, uint32_t len)
 {
 	int v;
 
@@ -3450,7 +3543,7 @@ __maybe_unused static int set_uint16_option(uint16_t *option, const void *value,
 }
 
 static int set_context_priority(struct net_context *context,
-				const void *value, size_t len)
+				const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_CONTEXT_PRIORITY)
 	return set_uint8_option(&context->options.priority, value, len);
@@ -3464,7 +3557,7 @@ static int set_context_priority(struct net_context *context,
 }
 
 static int set_context_txtime(struct net_context *context,
-			      const void *value, size_t len)
+			      const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_CONTEXT_TXTIME)
 	return set_bool_option(&context->options.txtime, value, len);
@@ -3478,7 +3571,7 @@ static int set_context_txtime(struct net_context *context,
 }
 
 static int set_context_proxy(struct net_context *context,
-			     const void *value, size_t len)
+			     const void *value, uint32_t len)
 {
 #if defined(CONFIG_SOCKS)
 	struct sockaddr *addr = (struct sockaddr *)value;
@@ -3505,7 +3598,7 @@ static int set_context_proxy(struct net_context *context,
 }
 
 static int set_context_rcvtimeo(struct net_context *context,
-				const void *value, size_t len)
+				const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_CONTEXT_RCVTIMEO)
 	if (len != sizeof(k_timeout_t)) {
@@ -3525,7 +3618,7 @@ static int set_context_rcvtimeo(struct net_context *context,
 }
 
 static int set_context_sndtimeo(struct net_context *context,
-				const void *value, size_t len)
+				const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_CONTEXT_SNDTIMEO)
 	if (len != sizeof(k_timeout_t)) {
@@ -3545,7 +3638,7 @@ static int set_context_sndtimeo(struct net_context *context,
 }
 
 static int set_context_rcvbuf(struct net_context *context,
-				const void *value, size_t len)
+				const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_CONTEXT_RCVBUF)
 	return set_uint16_option(&context->options.rcvbuf, value, len);
@@ -3559,7 +3652,7 @@ static int set_context_rcvbuf(struct net_context *context,
 }
 
 static int set_context_sndbuf(struct net_context *context,
-				const void *value, size_t len)
+				const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_CONTEXT_SNDBUF)
 	return set_uint16_option(&context->options.sndbuf, value, len);
@@ -3573,7 +3666,7 @@ static int set_context_sndbuf(struct net_context *context,
 }
 
 static int set_context_dscp_ecn(struct net_context *context,
-				const void *value, size_t len)
+				const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_CONTEXT_DSCP_ECN)
 	return set_uint8_option(&context->options.dscp_ecn, value, len);
@@ -3587,7 +3680,7 @@ static int set_context_dscp_ecn(struct net_context *context,
 }
 
 static int set_context_ttl(struct net_context *context,
-			   const void *value, size_t len)
+			   const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_IPV4)
 	uint8_t ttl = *((int *)value);
@@ -3605,7 +3698,7 @@ static int set_context_ttl(struct net_context *context,
 }
 
 static int set_context_mcast_ttl(struct net_context *context,
-				 const void *value, size_t len)
+				 const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_IPV4)
 	uint8_t mcast_ttl = *((int *)value);
@@ -3623,7 +3716,7 @@ static int set_context_mcast_ttl(struct net_context *context,
 }
 
 static int set_context_ipv4_mcast_loop(struct net_context *context,
-				       const void *value, size_t len)
+				       const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_IPV4)
 	return set_bool_option(&context->options.ipv4_mcast_loop, value, len);
@@ -3637,7 +3730,7 @@ static int set_context_ipv4_mcast_loop(struct net_context *context,
 }
 
 static int set_context_mcast_hop_limit(struct net_context *context,
-				       const void *value, size_t len)
+				       const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_IPV6)
 	int mcast_hop_limit = *((int *)value);
@@ -3673,7 +3766,7 @@ static int set_context_mcast_hop_limit(struct net_context *context,
 }
 
 static int set_context_unicast_hop_limit(struct net_context *context,
-					 const void *value, size_t len)
+					 const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_IPV6)
 	uint8_t unicast_hop_limit = *((int *)value);
@@ -3692,7 +3785,7 @@ static int set_context_unicast_hop_limit(struct net_context *context,
 }
 
 static int set_context_ipv6_mcast_loop(struct net_context *context,
-				       const void *value, size_t len)
+				       const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_IPV6)
 	return set_bool_option(&context->options.ipv6_mcast_loop, value, len);
@@ -3706,7 +3799,7 @@ static int set_context_ipv6_mcast_loop(struct net_context *context,
 }
 
 static int set_context_reuseaddr(struct net_context *context,
-				 const void *value, size_t len)
+				 const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_CONTEXT_REUSEADDR)
 	return set_bool_option(&context->options.reuseaddr, value, len);
@@ -3720,7 +3813,7 @@ static int set_context_reuseaddr(struct net_context *context,
 }
 
 static int set_context_reuseport(struct net_context *context,
-				 const void *value, size_t len)
+				 const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_CONTEXT_REUSEPORT)
 	return set_bool_option(&context->options.reuseport, value, len);
@@ -3734,7 +3827,7 @@ static int set_context_reuseport(struct net_context *context,
 }
 
 static int set_context_ipv6_mtu(struct net_context *context,
-				const void *value, size_t len)
+				const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_IPV6)
 	struct net_if *iface;
@@ -3783,7 +3876,7 @@ static int set_context_ipv6_mtu(struct net_context *context,
 }
 
 static int set_context_ipv6_v6only(struct net_context *context,
-				   const void *value, size_t len)
+				   const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_IPV4_MAPPING_TO_IPV6)
 	return set_bool_option(&context->options.ipv6_v6only, value, len);
@@ -3797,7 +3890,7 @@ static int set_context_ipv6_v6only(struct net_context *context,
 }
 
 static int set_context_recv_pktinfo(struct net_context *context,
-				    const void *value, size_t len)
+				    const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_CONTEXT_RECV_PKTINFO)
 	return set_bool_option(&context->options.recv_pktinfo, value, len);
@@ -3810,8 +3903,26 @@ static int set_context_recv_pktinfo(struct net_context *context,
 #endif
 }
 
+static int set_context_recv_hoplimit(struct net_context *context,
+				    const void *value, uint32_t len)
+{
+#if defined(CONFIG_NET_CONTEXT_RECV_HOPLIMIT)
+	if (net_context_get_type(context) == SOCK_DGRAM) {
+		return set_bool_option(&context->options.recv_hoplimit, value, len);
+	}
+
+	return -ENOTSUP;
+#else
+	ARG_UNUSED(context);
+	ARG_UNUSED(value);
+	ARG_UNUSED(len);
+
+	return -ENOTSUP;
+#endif
+}
+
 static int set_context_addr_preferences(struct net_context *context,
-					const void *value, size_t len)
+					const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_IPV6)
 	return set_uint16_option(&context->options.addr_preferences,
@@ -3826,7 +3937,7 @@ static int set_context_addr_preferences(struct net_context *context,
 }
 
 static int set_context_timestamping(struct net_context *context,
-				    const void *value, size_t len)
+				    const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_CONTEXT_TIMESTAMPING)
 	uint8_t timestamping_flags = *((uint8_t *)value);
@@ -3843,7 +3954,7 @@ static int set_context_timestamping(struct net_context *context,
 }
 
 static int set_context_mcast_ifindex(struct net_context *context,
-				     const void *value, size_t len)
+				     const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_IPV6) || defined(CONFIG_NET_IPV4)
 	sa_family_t family = net_context_get_family(context);
@@ -3904,7 +4015,7 @@ static int set_context_mcast_ifindex(struct net_context *context,
 }
 
 static int set_context_local_port_range(struct net_context *context,
-					const void *value, size_t len)
+					const void *value, uint32_t len)
 {
 #if defined(CONFIG_NET_CONTEXT_CLAMP_PORT_RANGE)
 	uint16_t lower_range, upper_range;
@@ -3944,7 +4055,7 @@ static int set_context_local_port_range(struct net_context *context,
 
 int net_context_set_option(struct net_context *context,
 			   enum net_context_option option,
-			   const void *value, size_t len)
+			   const void *value, uint32_t len)
 {
 	int ret = 0;
 
@@ -4034,6 +4145,9 @@ int net_context_set_option(struct net_context *context,
 	case NET_OPT_IPV4_MCAST_LOOP:
 		ret = set_context_ipv4_mcast_loop(context, value, len);
 		break;
+	case NET_OPT_RECV_HOPLIMIT:
+		ret = set_context_recv_hoplimit(context, value, len);
+		break;
 	}
 
 	k_mutex_unlock(&context->lock);
@@ -4043,7 +4157,7 @@ int net_context_set_option(struct net_context *context,
 
 int net_context_get_option(struct net_context *context,
 			    enum net_context_option option,
-			    void *value, size_t *len)
+			    void *value, uint32_t *len)
 {
 	int ret = 0;
 
@@ -4124,6 +4238,9 @@ int net_context_get_option(struct net_context *context,
 		break;
 	case NET_OPT_IPV4_MCAST_LOOP:
 		ret = get_context_ipv4_mcast_loop(context, value, len);
+		break;
+	case NET_OPT_RECV_HOPLIMIT:
+		ret = get_context_recv_hoplimit(context, value, len);
 		break;
 	}
 

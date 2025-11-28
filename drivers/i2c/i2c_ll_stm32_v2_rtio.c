@@ -209,7 +209,6 @@ int i2c_stm32_target_register(const struct device *dev,
 		return ret;
 	}
 
-#if defined(CONFIG_PM_DEVICE_RUNTIME)
 	/* Mark device as active */
 	(void)pm_device_runtime_get(dev);
 
@@ -220,7 +219,6 @@ int i2c_stm32_target_register(const struct device *dev,
 		LL_I2C_EnableWakeUpFromStop(cfg->i2c);
 	}
 #endif /* !CONFIG_SOC_SERIES_STM32F7X */
-#endif /* defined(CONFIG_PM_DEVICE_RUNTIME) */
 
 	LL_I2C_Enable(i2c);
 
@@ -301,7 +299,6 @@ int i2c_stm32_target_unregister(const struct device *dev,
 
 	LL_I2C_Disable(i2c);
 
-#if defined(CONFIG_PM_DEVICE_RUNTIME)
 #if !defined(CONFIG_SOC_SERIES_STM32F7X)
 	if (pm_device_wakeup_is_capable(dev)) {
 		/* Disable wake-up from STOP */
@@ -309,7 +306,6 @@ int i2c_stm32_target_unregister(const struct device *dev,
 		LL_I2C_DisableWakeUpFromStop(i2c);
 	}
 #endif /* !CONFIG_SOC_SERIES_STM32F7X */
-#endif /* defined(CONFIG_PM_DEVICE_RUNTIME) */
 
 	/* Release the device */
 	(void)pm_device_runtime_put(dev);
@@ -432,16 +428,29 @@ int i2c_stm32_error(const struct device *dev)
 	int ret = 0;
 
 #if defined(CONFIG_I2C_TARGET)
-	if (data->slave_attached && !data->master_active) {
-		/* No need for a target error function right now. */
-		return 0;
+	i2c_target_error_cb_t error_cb = NULL;
+
+	if (data->slave_attached && !data->master_active &&
+	    data->slave_cfg != NULL && data->slave_cfg->callbacks != NULL) {
+		error_cb = data->slave_cfg->callbacks->error;
 	}
 #endif
 
 	if (LL_I2C_IsActiveFlag_ARLO(i2c)) {
 		LL_I2C_ClearFlag_ARLO(i2c);
+#if defined(CONFIG_I2C_TARGET)
+		if (error_cb != NULL) {
+			error_cb(data->slave_cfg, I2C_ERROR_ARBITRATION);
+		}
+#endif
 		ret = -EIO;
 	}
+
+#if defined(CONFIG_I2C_TARGET)
+	if (data->slave_attached && !data->master_active) {
+		return ret;
+	}
+#endif
 
 	if (ret) {
 		i2c_stm32_master_mode_end(dev);
