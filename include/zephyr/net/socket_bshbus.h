@@ -11,10 +11,8 @@ extern "C" {
 
 /** @brief Protocols of the protocol family PF_BSHBUS */
 enum bshbus_proto_id {
-#if defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2) || defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2_DUMMY)
-	BSHBUS_DBUS2 = 0,   /**< BSH D-Bus-2 protocol */
-#endif /* CONFIG_NET_SOCKETS_BSHBUS_DBUS2 || CONFIG_NET_SOCKETS_BSHBUS_DBUS2_DUMMY */
-	BSHBUS_PROTO_MAX           /**< Used internally */
+	BSHBUS_DBUS2 = 0, /**< BSH D-Bus-2 protocol */
+	BSHBUS_PROTO_MAX  /**< Used internally */
 };
 
 /* SocketCAN options */
