@@ -39,6 +39,7 @@ struct bshbus_recv {
 #if defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2) || \
 	defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2_DUMMY)
 	struct bshbus_dbus2_recv *dbus2_recv;
+	uint8_t node_address;
 #endif
 };
 
@@ -586,6 +587,7 @@ static int bshbus2_add_receiver(struct net_context *ctx, int level, int optname,
 	const struct device *dev;
 	struct bshbus_recv *receiver;
 	int ret;
+
 	if (!id_range || optlen != sizeof(*id_range)) {
 		LOG_ERR("Invalid message ID range structure");
 		return -EINVAL;
@@ -627,6 +629,54 @@ static int bshbus2_add_receiver(struct net_context *ctx, int level, int optname,
 	return ret;
 }
 
+static int bshbus2_register_node(struct net_context *ctx, int level, int optname,
+			       const uint8_t *node_address, socklen_t optlen)
+{
+	const struct bshbus_api *api;
+	const struct device *dev;
+	struct bshbus_recv *receiver;
+	int ret;
+
+	if (!node_address || optlen != sizeof(*node_address)) {
+		LOG_ERR("Invalid node address");
+		return -EINVAL;
+	}
+
+	if (*node_address < 0x10) {
+		LOG_ERR("Invalid node address: %02x", *node_address);
+		return -EINVAL;
+	}
+
+	receiver = get_receiver(ctx);
+	if (!receiver) {
+		return -EBUSY;
+	}
+
+	if (receiver->node_address) {
+		LOG_ERR("Node already registered");
+		return 0;
+	}
+
+	receiver->node_address = *node_address;
+
+	if (!receiver->ctx) {
+		receiver->iface = net_context_get_iface(ctx);
+		receiver->ctx = ctx;
+	}
+
+	dev = net_if_get_device(receiver->iface);
+	api = dev->api;
+
+	ret = api->setsockopt(dev, ctx, level, optname, node_address, optlen);
+	if (ret) {
+		LOG_ERR("Registering D-Bus-2 node failed: %d", ret);
+		receiver->node_address = 0;
+		return ret;
+	}
+
+	return 0;
+}
+
 static int zbshbus_setsockopt_ctx(struct net_context *ctx, int level, int optname,
 			       const void *optval, socklen_t optlen)
 {
@@ -654,6 +704,9 @@ static int zbshbus_setsockopt_ctx(struct net_context *ctx, int level, int optnam
 	switch (optname) {
 		case BSHBUS_DBUS2_RECEIVER:
 			return bshbus2_add_receiver(ctx, level, optname, optval, optlen);
+			break;
+		case BSHBUS_DBUS2_NODE:
+			return bshbus2_register_node(ctx, level, optname, optval, optlen);
 			break;
 		default:
 			LOG_ERR("Invalid option name %d", optname);

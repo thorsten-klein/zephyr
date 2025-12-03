@@ -216,11 +216,11 @@ static int net_bshbus_setsockopt(const struct device *dev, void *obj, int level,
 	switch (optname) {
 		case BSHBUS_DBUS2_RECEIVER:
 			return bshbus_dbus2_add_receiver(cfg->bshbus_dev, net_bshbus_dbus2_recv, ctx);
-			break;
+		case BSHBUS_DBUS2_NODE:
+			return bshbus_dbus2_register_node(cfg->bshbus_dev, *(const uint8_t *)optval);
 		default:
 			LOG_ERR("Invalid option name %d", optname);
 			return -EINVAL;
-			break;
 	}
 
 	return -EINVAL;

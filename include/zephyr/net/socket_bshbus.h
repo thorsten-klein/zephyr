@@ -21,6 +21,7 @@ enum bshbus_proto_id {
 
 enum {
 	BSHBUS_DBUS2_RECEIVER = 1,
+	BSHBUS_DBUS2_NODE = 2,
 };
 
 /**

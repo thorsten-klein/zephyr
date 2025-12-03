@@ -42,6 +42,11 @@ extern "C" {
 #define BSHBUS_DBUS2_PROT_MAX_DLEN 252
 
 /**
+ * @brief Size of message ID in bytes
+ */ 
+#define BSHBUS_DBUS2_MSG_ID_SIZE	sizeof(uint16_t)
+
+/**
  * @brief Configured maximum data length for a BSH D-Bus-2 message.
  */
 #if defined(CONFIG_BSHBUS_DBUS2_MAX_DLEN) && (CONFIG_BSHBUS_DBUS2_MAX_DLEN < BSHBUS_DBUS2_PROT_MAX_DLEN) // TODO Kconfig
@@ -313,12 +318,28 @@ typedef int (*bshbus_dbus2_add_receiver_t)(const struct device *dev,
  */
 typedef int (*bshbus_dbus2_remove_receiver_t)(const struct device *dev);
 
+/**
+ * @brief Callback API upon registration of a BSH D-Bus-2 node
+ * See @a bshbus_dbus2_register_node() for argument description
+ */
+typedef int (*bshbus_dbus2_register_node_t)(const struct device *dev,
+			  const uint8_t node_address);
+
+/**
+ * @brief Callback API upon unregistration of a BSH D-Bus-2 node
+ * See @a bshbus_dbus2_unregister_node() for argument description
+ */			  
+typedef int (*bshbus_dbus2_unregister_node_t)(const struct device *dev,
+			  uint8_t node_address);
+
 __subsystem struct bshbus_driver_api {
 	bshbus_start_t start;
 	bshbus_stop_t stop;
 	bshbus_dbus2_send_t dbus2_send;
 	bshbus_dbus2_add_receiver_t dbus2_add_receiver;
 	bshbus_dbus2_remove_receiver_t dbus2_remove_receiver;
+	bshbus_dbus2_register_node_t dbus2_register_node;
+	bshbus_dbus2_unregister_node_t dbus2_unregister_node;
 };
 
 /** @endcond */
@@ -390,6 +411,36 @@ static inline int z_impl_bshbus_dbus2_add_receiver(const struct device *dev,
 	else {
 		return 0;
 	}
+}
+
+__syscall int bshbus_dbus2_register_node(const struct device *dev,
+		const uint8_t node_address);
+
+static inline int z_impl_bshbus_dbus2_register_node(const struct device *dev,
+		const uint8_t node_address)
+{
+	const struct bshbus_driver_api *api = (const struct bshbus_driver_api *)dev->api;
+
+	if (api->dbus2_register_node) {
+		return api->dbus2_register_node(dev, node_address);
+	}
+
+	return -ENOTSUP;
+}
+
+__syscall int bshbus_dbus2_unregister_node(const struct device *dev,
+		uint8_t node_address);
+
+static inline int z_impl_bshbus_dbus2_unregister_node(const struct device *dev,
+		uint8_t node_address)
+{
+	const struct bshbus_driver_api *api = (const struct bshbus_driver_api *)dev->api;
+
+	if (api->dbus2_unregister_node) {
+		return api->dbus2_unregister_node(dev, node_address);
+	}
+
+	return -ENOTSUP;
 }
 
 /** TODO
