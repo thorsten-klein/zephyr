@@ -35,13 +35,17 @@ LOG_MODULE_REGISTER(ti_bshbus, CONFIG_BSHBUS_LOG_LEVEL);
 #define TIBBUS_DEVICE_ID0_ADDR   0x0000u
 #define TIBBUS_DEVICE_ID1_ADDR   0x0004u
 #define TIBBUS_REVISION_ADDR     0x0008u
+#define TIBBUS_STATUS_ADDR       0x000Cu
 #define TIBBUS_SPI_CRC_CFG_ADDR  0x0014u
 #define TIBBUS_MOPC_ADDR         0x0800u
 #define TIBBUS_IPEC_ADDR         0x0814u
 #define TIBBUS_EEPP_ADDR         0x0818u
 #define TIBBUS_IF_ADDR           0x0820u
+#define TIBBUS_IE_ADDR           0x0830u
 #define TIBBUS_DBUS_CCCR_ADDR    0x4018u
 #define TIBBUS_DBUS_DBR_ADDR     0x404Cu
+#define TIBBUS_DBUS_IR_ADDR      0x4050u
+#define TIBBUS_DBUS_IE_ADDR      0x4054u
 #define TIBBUS_DBUS_BSA_ADDR     0x4060u
 #define TIBBUS_DBUS_BCC_ADDR     0x406Cu
 #define TIBBUS_DBUS_DPC_ADDR     0x4074u
@@ -111,6 +115,12 @@ LOG_MODULE_REGISTER(ti_bshbus, CONFIG_BSHBUS_LOG_LEVEL);
 /* IF */
 #define TIBBUS_IF_ECCERR_INT_MASK  0x00000800u
 #define TIBBUS_IF_PWRON_MASK       0x00100000u
+#define TIBBUS_IF_UVCC_MASK        0x00020000u
+#define TIBBUS_IF_DBUS_CAN_MASK    0x00000002u
+
+/* IE (Interrupt Enable) */
+#define TIBBUS_DBUS_IE_ALL_BIT_MASK     0x0007FFFFu
+#define TIBBUS_DBUS_IE_DBUSSLNT_EN_MASK 0x00000100u
 
 /* SPI CRC */
 #define TIBBUS_SPI_CRC_CFG_EN_MASK 0x00000001u
@@ -178,12 +188,15 @@ typedef struct {
 struct ti_bshbus_data {
 	struct k_thread int_thread;
 	struct k_sem int_sem;
+	struct gpio_callback int_gpio_cb;
+	const struct device *dev;
 
 	K_KERNEL_STACK_MEMBER(int_stack, CONFIG_BSHBUS_TIDBUS_THREAD_STACK_SIZE);
 };
 
 struct ti_bshbus_config {
 	struct spi_dt_spec spi;
+	struct gpio_dt_spec irq_gpio;
 	uint32_t clk_freq;
 };
 
@@ -253,7 +266,6 @@ static int tibbus_write_reg_ipec(const struct device *dev, uint32_t bit_val, uin
 	reg_val |= TIBBUS_IPEC_CCE_MASK;
 	ret = tibbus_write_reg(dev, TIBBUS_IPEC_ADDR, reg_val);
 	if (ret) {
-		LOG_ERR("Failed to write IPEC CCE mask: %d", ret);
 		return ret;
 	}
 
@@ -320,7 +332,6 @@ static int tibbus_disable_spi_crc(const struct device *dev)
 {
 	/* Precalculated CRC value for the SPI frame which disables SPI CRC */
 	const uint32_t SPI_CRC_FOR_DISABLE_CMD = 0xF20Au;
-
 	uint8_t tx_buf[TIBBUS_SPI_HDR_SIZE + TIBBUS_REG_SIZE * 2];
 	uint32_t reg_val;
 	int ret;
@@ -343,7 +354,7 @@ static int tibbus_disable_spi_crc(const struct device *dev)
 
 	/* Send with CRC */
 	ret = tibbus_transceive(dev, tx_buf, TIBBUS_SPI_HDR_SIZE + TIBBUS_REG_SIZE * 2, NULL, 0);
-	if (ret {
+	if (ret) {
 		LOG_ERR("Disable SPI CRC (with CRC) failed: %d", ret);
 		return ret;
 	}
@@ -471,6 +482,77 @@ static int tibbus_do_reset(const struct device *dev)
 	return tibbus_reset_hard(dev);
 }
 
+static int tibbus_enable_and_clear_irq_flags(const struct device *dev)
+{
+	uint32_t reg_val;
+	int ret;
+
+	ret = tibbus_read_reg(dev, TIBBUS_IE_ADDR, &reg_val);
+	if (ret) {
+		LOG_ERR("Failed to read IE register: %d", ret);
+		return ret;
+	}
+
+	reg_val |= TIBBUS_IF_DBUS_CAN_MASK;
+	reg_val &= ~TIBBUS_IF_UVCC_MASK;
+	ret = tibbus_write_reg(dev, TIBBUS_IE_ADDR, reg_val);
+	if (ret) {
+		LOG_ERR("Failed to write IE register: %d", ret);
+		return ret;
+	}
+
+	/* Enable all DBus interrupts except D-Bus silent flag */
+	ret = tibbus_write_reg(dev, TIBBUS_DBUS_IE_ADDR,
+			       TIBBUS_DBUS_IE_ALL_BIT_MASK & ~TIBBUS_DBUS_IE_DBUSSLNT_EN_MASK);
+	if (ret) {
+		LOG_ERR("Failed to write DBUS IE register: %d", ret);
+		return ret;
+	}
+
+	/* Clear D-Bus interrupt flags */
+	ret = tibbus_read_reg(dev, TIBBUS_DBUS_IR_ADDR, &reg_val);
+	if (!ret) {
+		ret = tibbus_write_reg(dev, TIBBUS_DBUS_IR_ADDR, reg_val);
+		if (ret) {
+			LOG_ERR("Failed to write DBUS IR register: %d", ret);
+			return ret;
+		}
+	}
+	else {
+		LOG_ERR("Failed to read DBUS IR register: %d", ret);
+		return ret;
+	}
+
+	/* Clear global interrupt flags */
+	ret = tibbus_read_reg(dev, TIBBUS_IF_ADDR, &reg_val);
+	if (!ret) {
+		ret = tibbus_write_reg(dev, TIBBUS_IF_ADDR, reg_val);
+		if (ret) {
+			LOG_ERR("Failed to write IF register: %d", ret);
+			return ret;
+		}
+	}
+	else {
+		LOG_ERR("Failed to read IF register: %d", ret);
+		return ret;
+	}
+
+	/* Clear SPI status flags */
+	ret = tibbus_read_reg(dev, TIBBUS_STATUS_ADDR, &reg_val);
+	if (!ret) {
+		ret = tibbus_write_reg(dev, TIBBUS_STATUS_ADDR, reg_val);
+		if (ret) {
+			return ret;
+		}
+	}
+	else {
+		LOG_ERR("Failed to read STATUS register: %d", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
 #if LOG_LEVEL >= LOG_LEVEL_DBG
 static void tibbus_get_dev_info(const struct device *dev)
 {
@@ -546,6 +628,7 @@ static int tibbus_disable_cfg_dbus(const struct device *dev)
 static tibbus_cfg tibbus_get_config(void)
 {
 	tibbus_cfg cfg = {{0}};
+
 	cfg.CLKIN = 0; /* 20MHz */
 	cfg.GP_MEM = 0u;
 	cfg.DBUS_EN = 1u;
@@ -856,6 +939,105 @@ int tibbus_remove_receiver(const struct device *dev)
 	return 0;
 }
 
+static void tibbus_int_gpio_callback(const struct device *port,
+				     struct gpio_callback *cb,
+				     gpio_port_pins_t pins)
+{
+	struct ti_bshbus_data *data = CONTAINER_OF(cb, struct ti_bshbus_data, int_gpio_cb);
+
+	ARG_UNUSED(port);
+	ARG_UNUSED(pins);
+
+	/* Signal the interrupt thread */
+	k_sem_give(&data->int_sem);
+}
+
+static int tibbus_init_irq_gpio(const struct device *dev)
+{
+	const struct ti_bshbus_config *config = dev->config;
+	struct ti_bshbus_data *data = dev->data;
+	int ret;
+
+	if (!gpio_is_ready_dt(&config->irq_gpio)) {
+		LOG_ERR("Interrupt GPIO not ready");
+		return -ENODEV;
+	}
+
+	ret = gpio_pin_configure_dt(&config->irq_gpio, GPIO_INPUT);
+	if (ret) {
+		LOG_ERR("Failed to configure interrupt GPIO: %d", ret);
+		return ret;
+	}
+
+	ret = gpio_pin_interrupt_configure_dt(&config->irq_gpio,
+					      GPIO_INT_EDGE_TO_ACTIVE);
+	if (ret) {
+		LOG_ERR("Failed to configure interrupt: %d", ret);
+		return ret;
+	}
+
+	gpio_init_callback(&data->int_gpio_cb,
+			   tibbus_int_gpio_callback,
+			   BIT(config->irq_gpio.pin));
+
+	ret = gpio_add_callback(config->irq_gpio.port, &data->int_gpio_cb);
+	if (ret != 0) {
+		LOG_ERR("Failed to add GPIO callback: %d", ret);
+		return ret;
+	}
+
+	LOG_DBG("Interrupt GPIO configured on pin %d", config->irq_gpio.pin);
+
+	return 0;
+}
+
+static int tibbus_handle_irq(const struct device *dev)
+{
+	uint32_t global_flags;
+	uint32_t dbus_flags;
+	int ret;
+
+	ret = tibbus_read_reg(dev, TIBBUS_IF_ADDR, &global_flags);
+	if (ret) {
+		LOG_ERR("Failed to read IF: %d", ret);
+		return ret;
+	}
+
+	ret = tibbus_read_reg(dev, TIBBUS_DBUS_IR_ADDR, &dbus_flags);
+	if (ret) {
+		LOG_ERR("Failed to read DBUS_IR: %d", ret);
+		return ret;
+	}
+
+	/* Clear D-Bus interrupt flags */
+	if (dbus_flags != 0) {
+		ret = tibbus_write_reg(dev, TIBBUS_DBUS_IR_ADDR, dbus_flags);
+		if (ret) {
+			LOG_ERR("Failed to clear DBUS_IR: %d", ret);
+			return ret;
+		}
+	}
+
+	/* Clear global interrupt flags */
+	if (global_flags != 0) {
+		ret = tibbus_write_reg(dev, TIBBUS_IF_ADDR, global_flags);
+		if (ret) {
+			LOG_ERR("Failed to clear IF: %d", ret);
+			return ret;
+		}
+	}
+
+	if (dbus_flags & TIBBUS_DBUS_IR_RF0L_MASK) {
+		LOG_WRN("RX FIFO message lost");
+	}
+
+	if (dbus_flags & TIBBUS_DBUS_IR_RF0F_MASK) {
+		LOG_WRN("RX FIFO full");
+	}
+
+	return 0;
+}
+
 static void tibbus_int_thread(void *p1, void *p2, void *p3)
 {
 	ARG_UNUSED(p2);
@@ -863,11 +1045,17 @@ static void tibbus_int_thread(void *p1, void *p2, void *p3)
 
 	const struct device *dev = p1;
 	struct ti_bshbus_data *tibbus_data = dev->data;
+	const struct ti_bshbus_config *tibbus_config = dev->config;
 
 	LOG_DBG("Thread started...");
 
 	while (true) {
 		k_sem_take(&tibbus_data->int_sem, K_FOREVER);
+
+		/* Handle interrupt while pin is active (low) */
+		while (gpio_pin_get_dt(&tibbus_config->irq_gpio) == 1) {
+			tibbus_handle_irq(dev);
+		}
 	}
 }
 
@@ -886,6 +1074,14 @@ static int tibbus_init(const struct device *dev)
 	if (!spi_is_ready_dt(&tibbus_config->spi)) {
 		LOG_ERR("SPI bus not ready");
 		return -ENODEV;
+	}
+
+	/* Store device reference for use in callback */
+	tibbus_data->dev = dev;
+
+	ret = tibbus_init_irq_gpio(dev);
+	if (ret != 0) {
+		return ret;
 	}
 
 	tid = k_thread_create(&tibbus_data->int_thread, tibbus_data->int_stack,
@@ -943,6 +1139,12 @@ static int tibbus_init(const struct device *dev)
 	ret = tibbus_write_reg(dev, TIBBUS_DBUS_BCC_ADDR, TIBBUS_DBUS_BCC_RXFIFO_CLR_MASK);
 	if (ret) {
 		LOG_ERR("Failed to clear RX FIFO: %d", ret);
+		return ret;
+	}
+
+	ret = tibbus_enable_and_clear_irq_flags(dev);
+	if (ret) {
+		LOG_ERR("Failed to enable/clear IRQ flags: %d", ret);
 		return ret;
 	}
 
