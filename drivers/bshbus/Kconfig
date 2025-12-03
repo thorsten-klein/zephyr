@@ -24,6 +24,19 @@ config BSHBUS_INIT_PRIORITY
 	help
 	  BSH Bus driver device initialization priority.
 
+config BSHBUS_NODE_ADDRESS
+	hex "BSH Bus node address"
+	default 0xA0
+	range 0x10 0xFF
+	help
+	  BSH Bus node address.
+
+config BSHBUS_BAUDRATE
+	int "BSH Bus baudrate"
+	default 9600
+	help
+	  BSH Bus baudrate of data line.
+
 config BSHBUS_SHELL
 	bool "BSH Bus shell"
 	depends on SHELL
