@@ -12,6 +12,13 @@ menuconfig BSHBUS_TIDBUS
 
 if BSHBUS_TIDBUS
 
+config BSHBUS_TIDBUS_MAX_MSG_RETRIES
+	int "Maximum number of send message retries"
+	default 3
+	range 0 15
+	help
+		TI BSH D-Bus chip will retry to send a failed message this many times.
+
 config BSHBUS_TIDBUS_THREAD_STACK_SIZE
 	int "Stack size for the TI BSH D-Bus interrupt thread"
 	default 4096

@@ -126,6 +126,7 @@ LOG_MODULE_REGISTER(ti_bshbus, CONFIG_BSHBUS_LOG_LEVEL);
 #define TIBBUS_DBUS_IR_RF0N_MASK 0x00000001u /* RX FIFO new message */
 #define TIBBUS_DBUS_IR_RF0F_MASK 0x00000004u /* RX FIFO full */
 #define TIBBUS_DBUS_IR_RF0L_MASK 0x00000008u /* RX FIFO message lost */
+#define TIBBUS_DBUS_IR_TEFN_MASK 0x00001000u /* TX Status FIFO new entry */
 
 /* DBUS RXF0S (RX FIFO Status) */
 #define TIBBUS_DBUS_RXF0S_ADDR       0x40A4u
@@ -135,7 +136,25 @@ LOG_MODULE_REGISTER(ti_bshbus, CONFIG_BSHBUS_LOG_LEVEL);
 
 /* DBUS RX/TX FIFO */
 #define TIBBUS_DBUS_RX_TX_FIFO_ADDR  0x4400u
-#define TIBBUS_DBUS_RX_MAX_SIZE      256u
+#define TIBBUS_DBUS_RX_MAX_SIZE      256u /* Maximum RX message size in bytes */
+
+/* DBUS TXFQS (TX FIFO Queue Status) */
+#define TIBBUS_DBUS_TXFQS_ADDR       0x40C4u
+#define TIBBUS_DBUS_TXFQS_TFFL_MASK  0x0000000Fu /* TX FIFO fill level (free elements) */
+#define TIBBUS_DBUS_TXFQS_TFDA_MASK  0x0007FF00u /* TX FIFO data available (words) */
+#define TIBBUS_DBUS_TXFQS_TFDA_POS   8u
+
+/* TX FIFO Header Size */
+#define TIBBUS_DBUS_TXF_HDR_SIZE     6u
+#define TIBBUS_DBUS_TX_MAX_SIZE      256u
+
+/* DBUS TXEFS (TX Event FIFO Status) */
+#define TIBBUS_DBUS_TXEFS_ADDR       0x40F4u
+#define TIBBUS_DBUS_TXEFS_TEFFL_MASK 0x0000000Fu /* TX Event FIFO fill level (0-8) */
+
+/* TX Status FIFO */
+#define TIBBUS_DBUS_TXSF_ADDR        0x4300u
+#define TIBBUS_DBUS_TXSF_SIZE        8u
 
 struct tibbus_rx_header {
 	/* Word 0 */
@@ -152,6 +171,23 @@ struct tibbus_rx_header {
 	uint8_t pid_sid;       /* Partner ID / Subsystem ID */
 	/* Message ID follows, then data, then CRC (2 bytes) */
 } __packed;
+
+struct tibbus_tx_status {
+	/* Word 0 */
+	uint16_t tx_ts;        /* Transmit timestamp */
+	uint8_t frame_len;     /* Frame length */
+	uint8_t target_addr;   /* Target address */
+	/* Word 1 */
+	uint8_t tx_bytes;      /* Number of bytes transmitted */
+	uint8_t ack;           /* ACK byte received */
+	uint8_t ack_status;    /* ACK status flags */
+	uint8_t frame_status;  /* Frame status flags */
+} __packed;
+
+/* Frame status bits */
+#define TIBBUS_TX_STATUS_SUCCESS    0x01
+#define TIBBUS_TX_STATUS_FAILURE    0x02
+#define TIBBUS_TX_STATUS_COLLISION  0x04
 
 /* SPI CRC */
 #define TIBBUS_SPI_CRC_CFG_EN_MASK 0x00000001u
@@ -216,6 +252,11 @@ typedef struct {
 	};
 } tibbus_cfg;	// TODO Rework and move to Device Tree
 
+struct ti_bshbus_tx {
+	void *user_data;
+	bshbus_dbus2_tx_callback_t cb;
+};
+
 struct ti_bshbus_rx {
 	void *user_data;
 	bshbus_dbus2_rx_callback_t cb;
@@ -224,6 +265,7 @@ struct ti_bshbus_rx {
 struct ti_bshbus_data {
 	struct k_thread int_thread;
 	struct k_sem int_sem;
+	struct ti_bshbus_tx tx;
 	struct ti_bshbus_rx rx;
 	struct gpio_callback int_gpio_cb;
 	const struct device *dev;
@@ -312,6 +354,34 @@ static int tibbus_read_data(const struct device *dev, uint16_t addr, uint8_t *da
 	ret = spi_transceive_dt(&tibbus_config->spi, &tx_set, &rx_set);
 	if (ret) {
 		LOG_ERR("SPI read failed: %d", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+static int tibbus_write_data(const struct device *dev, uint16_t addr,
+			     const uint8_t *data, uint16_t len)
+{
+	const struct ti_bshbus_config *tibbus_config = dev->config;
+	uint8_t tx_buf[TIBBUS_SPI_HDR_SIZE];
+	int ret;
+
+	if (len > TIBBUS_DBUS_TX_MAX_SIZE) {
+		return -EINVAL;
+	}
+
+	tibbus_set_spi_hdr(tx_buf, addr, len, TIBBUS_WRITE_H);
+
+	struct spi_buf tx_spi_buf[] = {
+		{.buf = tx_buf, .len = TIBBUS_SPI_HDR_SIZE},
+		{.buf = (void *)data, .len = len},
+	};
+	struct spi_buf_set tx_set = {.buffers = tx_spi_buf, .count = 2};
+
+	ret = spi_write_dt(&tibbus_config->spi, &tx_set);
+	if (ret) {
+		LOG_ERR("SPI write failed: %d", ret);
 		return ret;
 	}
 
@@ -431,14 +501,15 @@ static int tibbus_disable_spi_crc(const struct device *dev)
 
 	/* Verify CRC was disabled by reading the register */
 	ret = tibbus_read_reg(dev, TIBBUS_SPI_CRC_CFG_ADDR, &reg_val);
-	if (ret) {
+	if (!ret) {
+		if ((reg_val & TIBBUS_SPI_CRC_CFG_EN_MASK) != 0u) {
+			LOG_ERR("Failed to disable SPI CRC: reg=0x%08x", reg_val);
+			return -EIO;
+		}
+	}
+	else {
 		LOG_ERR("Failed to read SPI_CRC_CFG: %d", ret);
 		return ret;
-	}
-
-	if ((reg_val & TIBBUS_SPI_CRC_CFG_EN_MASK) != 0u) {
-		LOG_ERR("Failed to disable SPI CRC: reg=0x%08x", reg_val);
-		return -EIO;
 	}
 
 	return 0;
@@ -994,6 +1065,97 @@ int tibbus_stop(const struct device *dev)
 	return 0;
 }
 
+int tibbus_send(const struct device *dev, const struct bshbus_frame_dbus2_tx *tx,
+		bshbus_dbus2_tx_callback_t cb, void *user_data)
+{
+	uint8_t tx_buf[TIBBUS_DBUS_TX_MAX_SIZE] __aligned(4);
+	uint32_t txfqs;
+	uint16_t frame_size;
+	uint16_t msg_len;
+	int ret;
+
+	if (!cb) {
+		LOG_ERR("Callback is NULL");
+		return -EINVAL;
+	}
+
+	/* Message ID size + data bytes */
+	msg_len = BSHBUS_DBUS2_MSG_ID_SIZE + tx->dlen;
+
+	/* Calculate total frame size including header, rounded up to words */
+	frame_size = TIBBUS_DBUS_TXF_HDR_SIZE + msg_len;
+	frame_size = (frame_size + 3) & ~3;
+	if (frame_size > TIBBUS_DBUS_TX_MAX_SIZE) {
+		LOG_ERR("Frame too large: %u", frame_size);
+		return -EINVAL;
+	}
+
+	/* Check TX FIFO status */
+	ret = tibbus_read_reg(dev, TIBBUS_DBUS_TXFQS_ADDR, &txfqs);
+	if (ret) {
+		LOG_ERR("Failed to read TXFQS: %d", ret);
+		return ret;
+	}
+
+	/* Check if TX FIFO has free elements */
+	uint8_t tx_fifo_free = txfqs & TIBBUS_DBUS_TXFQS_TFFL_MASK;
+	if (tx_fifo_free == 0) {
+		LOG_ERR("TX FIFO full");
+		return -EBUSY;
+	}
+
+	/* Check if TX FIFO has enough space */
+	uint16_t tx_fifo_avail = (txfqs & TIBBUS_DBUS_TXFQS_TFDA_MASK) >> TIBBUS_DBUS_TXFQS_TFDA_POS;
+	if ((frame_size / 4) > tx_fifo_avail) {
+		LOG_ERR("TX FIFO not enough space: need %u words, have %u",
+			frame_size / 4, tx_fifo_avail);
+		return -EBUSY;
+	}
+
+	/* Build TX frame in buffer */
+	memset(tx_buf, 0, frame_size);
+
+	/*
+	 * Word 0:
+	 *     bit 0-3: message retries
+	 *     bit 4-7: reserved
+	 *     bit 8: CRC handling
+	 *     bit 9-31: reserved
+	 */
+	tx_buf[0] = CONFIG_BSHBUS_TIDBUS_MAX_MSG_RETRIES;	// TODO Really use a global setting for the retries?
+	tx_buf[1] = 0; /* let chip calculate CRC */
+	tx_buf[2] = 0;
+	tx_buf[3] = 0;
+
+	/* Word 1 (partial): MSG_LEN, TARGET_ADDR */
+	tx_buf[4] = msg_len;
+	tx_buf[5] = tx->dest_addr;
+
+	/* Message ID */
+	tx_buf[6] = (tx->msg_id >> 8) & 0xFF;
+	tx_buf[7] = tx->msg_id & 0xFF;
+
+	/* Data */
+	if (tx->dlen > 0) {
+		memcpy(&tx_buf[8], tx->data, tx->dlen);
+	}
+
+	/* Store callback for TX indication */
+	struct ti_bshbus_data *data = dev->data;
+	data->tx.user_data = user_data;
+	data->tx.cb = cb;
+
+	ret = tibbus_write_data(dev, TIBBUS_DBUS_RX_TX_FIFO_ADDR, tx_buf, frame_size);
+	if (ret != 0) {
+		LOG_ERR("Failed to write TX FIFO: %d", ret);
+		return ret;
+	}
+
+	LOG_DBG("TX: addr=0x%02X, msg_id=0x%04X, len=%u", tx->dest_addr, tx->msg_id, tx->dlen);
+
+	return 0;
+}
+
 int tibbus_add_receiver(const struct device *dev, bshbus_dbus2_rx_callback_t cb,
 			void *user_data)
 {
@@ -1144,6 +1306,61 @@ static int tibbus_read_rx_message(const struct device *dev)
 	return 0;
 }
 
+static int tibbus_read_tx_status(const struct device *dev)
+{
+	uint32_t txefs;
+	uint8_t tx_buf[TIBBUS_DBUS_TXSF_SIZE] __aligned(4);
+	struct tibbus_tx_status *status;
+	int ret;
+
+	ret = tibbus_read_reg(dev, TIBBUS_DBUS_TXEFS_ADDR, &txefs);
+	if (ret) {
+		LOG_ERR("Failed to read TXEFS: %d", ret);
+		return ret;
+	}
+
+	/* Check if there's a status entry */
+	uint8_t tx_status_count = txefs & TIBBUS_DBUS_TXEFS_TEFFL_MASK;
+	if (tx_status_count == 0) {
+		LOG_DBG("No TX status in FIFO");
+		return 0;
+	}
+
+	ret = tibbus_read_data(dev, TIBBUS_DBUS_TXSF_ADDR, tx_buf, TIBBUS_DBUS_TXSF_SIZE);
+	if (ret != 0) {
+		LOG_ERR("Failed to read TX status: %d", ret);
+		return ret;
+	}
+
+	status = (struct tibbus_tx_status *)tx_buf;
+
+	/* Determine frame status for callback */
+	struct ti_bshbus_data *data = dev->data;
+	uint16_t frame_status;
+
+	if (status->frame_status & TIBBUS_TX_STATUS_SUCCESS) {
+		LOG_DBG("TX: addr=0x%02X SUCCESS", status->target_addr);
+		frame_status = BSHBUS_FRAME_STATUS_VALID;
+	} else if (status->frame_status & TIBBUS_TX_STATUS_COLLISION) {
+		LOG_WRN("TX: addr=0x%02X COLLISION", status->target_addr);
+		frame_status = BSHBUS_FRAME_STATUS_COLLISION;
+	} else if (status->frame_status & TIBBUS_TX_STATUS_FAILURE) {
+		LOG_WRN("TX: addr=0x%02X FAILED", status->target_addr);
+		frame_status = BSHBUS_FRAME_STAUTS_ACK_TIMEOUT;
+	} else {
+		LOG_WRN("TX: addr=0x%02X unknown status=0x%02X",
+			status->target_addr, status->frame_status);
+		frame_status = BSHBUS_FRAME_STATUS_UNKOWN;
+	}
+
+	if (data->tx.cb) {
+		/* Forward transmit indication */
+		data->tx.cb(dev, frame_status, data->tx.user_data);
+	}
+
+	return 0;
+}
+
 static int tibbus_handle_irq(const struct device *dev)
 {
 	uint32_t global_flags;
@@ -1182,6 +1399,10 @@ static int tibbus_handle_irq(const struct device *dev)
 
 	if (dbus_flags & TIBBUS_DBUS_IR_RF0N_MASK) {
 		tibbus_read_rx_message(dev);
+	}
+
+	if (dbus_flags & TIBBUS_DBUS_IR_TEFN_MASK) {
+		tibbus_read_tx_status(dev);
 	}
 
 	if (dbus_flags & TIBBUS_DBUS_IR_RF0L_MASK) {
