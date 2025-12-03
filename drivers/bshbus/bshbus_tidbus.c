@@ -122,6 +122,37 @@ LOG_MODULE_REGISTER(ti_bshbus, CONFIG_BSHBUS_LOG_LEVEL);
 #define TIBBUS_DBUS_IE_ALL_BIT_MASK     0x0007FFFFu
 #define TIBBUS_DBUS_IE_DBUSSLNT_EN_MASK 0x00000100u
 
+/* DBUS IR (Interrupt Flags) */
+#define TIBBUS_DBUS_IR_RF0N_MASK 0x00000001u /* RX FIFO new message */
+#define TIBBUS_DBUS_IR_RF0F_MASK 0x00000004u /* RX FIFO full */
+#define TIBBUS_DBUS_IR_RF0L_MASK 0x00000008u /* RX FIFO message lost */
+
+/* DBUS RXF0S (RX FIFO Status) */
+#define TIBBUS_DBUS_RXF0S_ADDR       0x40A4u
+#define TIBBUS_DBUS_RXF0S_RF0FL_MASK 0x0000000Fu /* RX FIFO fill level (0-8) */
+#define TIBBUS_DBUS_RXF0S_RF0MS_MASK 0x0007FF00u /* RX FIFO message size in words */
+#define TIBBUS_DBUS_RXF0S_RF0MS_POS  8u
+
+/* DBUS RX/TX FIFO */
+#define TIBBUS_DBUS_RX_TX_FIFO_ADDR  0x4400u
+#define TIBBUS_DBUS_RX_MAX_SIZE      256u
+
+struct tibbus_rx_header {
+	/* Word 0 */
+	uint16_t rx_ts;        /* Received frame timestamp */
+	uint8_t frame_len;     /* Frame length (message length + 4) */
+	uint8_t target_addr;   /* Target address of received frame */
+	/* Word 1 */
+	uint8_t rx_bytes;      /* Number of bytes received */
+	uint8_t ack;           /* Acknowledge value received */
+	uint8_t ack_status;    /* Acknowledge status flags */
+	uint8_t frame_status;  /* Frame status flags */
+	/* Word 2 */
+	uint8_t msg_len;       /* Number of data bytes (2-251) */
+	uint8_t pid_sid;       /* Partner ID / Subsystem ID */
+	/* Message ID follows, then data, then CRC (2 bytes) */
+} __packed;
+
 /* SPI CRC */
 #define TIBBUS_SPI_CRC_CFG_EN_MASK 0x00000001u
 
@@ -185,9 +216,15 @@ typedef struct {
 	};
 } tibbus_cfg;	// TODO Rework and move to Device Tree
 
+struct ti_bshbus_rx {
+	void *user_data;
+	bshbus_dbus2_rx_callback_t cb;
+};
+
 struct ti_bshbus_data {
 	struct k_thread int_thread;
 	struct k_sem int_sem;
+	struct ti_bshbus_rx rx;
 	struct gpio_callback int_gpio_cb;
 	const struct device *dev;
 
@@ -246,6 +283,39 @@ static int tibbus_read_reg(const struct device *dev, uint16_t addr, uint32_t *va
 	}
 
 	return ret;
+}
+
+static int tibbus_read_data(const struct device *dev, uint16_t addr, uint8_t *data, uint16_t len)
+{
+	const struct ti_bshbus_config *tibbus_config = dev->config;
+	uint8_t tx_buf[TIBBUS_SPI_HDR_SIZE];
+	uint8_t rx_buf[TIBBUS_SPI_HDR_SIZE + TIBBUS_DBUS_RX_MAX_SIZE];
+	int ret;
+
+	if (len > TIBBUS_DBUS_RX_MAX_SIZE) {
+		return -EINVAL;
+	}
+
+	tibbus_set_spi_hdr(tx_buf, addr, len, TIBBUS_READ_H);
+
+	struct spi_buf tx_spi_buf[] = {
+		{.buf = tx_buf, .len = TIBBUS_SPI_HDR_SIZE},
+		{.buf = NULL, .len = len},
+	};
+	struct spi_buf rx_spi_buf[] = {
+		{.buf = rx_buf, .len = TIBBUS_SPI_HDR_SIZE},
+		{.buf = data, .len = len},
+	};
+	struct spi_buf_set tx_set = {.buffers = tx_spi_buf, .count = 2};
+	struct spi_buf_set rx_set = {.buffers = rx_spi_buf, .count = 2};
+
+	ret = spi_transceive_dt(&tibbus_config->spi, &tx_set, &rx_set);
+	if (ret) {
+		LOG_ERR("SPI read failed: %d", ret);
+		return ret;
+	}
+
+	return 0;
 }
 
 static int tibbus_write_reg_ipec(const struct device *dev, uint32_t bit_val, uint32_t bit_pos,
@@ -927,7 +997,14 @@ int tibbus_stop(const struct device *dev)
 int tibbus_add_receiver(const struct device *dev, bshbus_dbus2_rx_callback_t cb,
 			void *user_data)
 {
+	struct ti_bshbus_data *data = dev->data;
+
 	LOG_DBG("Add receiver to %s:", dev->name);
+
+	if (!data->rx.cb) {
+		data->rx.user_data = user_data;
+		data->rx.cb = cb;
+	}
 
 	return 0;
 }
@@ -936,6 +1013,19 @@ int tibbus_remove_receiver(const struct device *dev)
 {
 	/* For now no use case for it */
 	LOG_DBG("Remove receiver from %s:", dev->name);
+	return 0;
+}
+
+int tibbus_register_node(const struct device *dev, uint8_t node_address)
+{
+	LOG_DBG("Register node %02x on %s:", node_address, dev->name);
+
+	return tibbus_set_node_address(dev, node_address);
+}
+
+int tibbus_unregister_node(const struct device *dev, uint8_t node_address)
+{
+	LOG_DBG("Unregister node %02x on %s:", node_address, dev->name);
 	return 0;
 }
 
@@ -991,6 +1081,69 @@ static int tibbus_init_irq_gpio(const struct device *dev)
 	return 0;
 }
 
+static int tibbus_read_rx_message(const struct device *dev)
+{
+	uint32_t rxf0s;
+	uint32_t msg_size_words;
+	uint32_t msg_size_bytes;
+	uint8_t rx_buf[TIBBUS_DBUS_RX_MAX_SIZE] __aligned(4);
+	struct tibbus_rx_header *hdr;
+	uint8_t *msg_data;
+	uint16_t msg_id;
+	int ret;
+
+	ret = tibbus_read_reg(dev, TIBBUS_DBUS_RXF0S_ADDR, &rxf0s);
+	if (ret) {
+		LOG_ERR("Failed to read RXF0S: %d", ret);
+		return ret;
+	}
+
+	/* Get message size in words */
+	msg_size_words = (rxf0s & TIBBUS_DBUS_RXF0S_RF0MS_MASK) >> TIBBUS_DBUS_RXF0S_RF0MS_POS;
+	if (msg_size_words == 0) {
+		LOG_DBG("No message in RX FIFO");
+		return 0;
+	}
+
+	/* Convert to bytes (round up to word boundary) */
+	msg_size_bytes = msg_size_words * 4;
+	if (msg_size_bytes > TIBBUS_DBUS_RX_MAX_SIZE) {
+		msg_size_bytes = TIBBUS_DBUS_RX_MAX_SIZE;
+	}
+
+	ret = tibbus_read_data(dev, TIBBUS_DBUS_RX_TX_FIFO_ADDR, rx_buf, msg_size_bytes);
+	if (ret) {
+		LOG_ERR("Failed to read RX FIFO: %d", ret);
+		return ret;
+	}
+
+	/* Parse header - the layout is:
+	 * Word 0: RX_TS[0], RX_TS[1], FRAME_LEN, TARGET_ADDR
+	 * Word 1: RX_BYTES, ACK, ACK_STATUS, FRAME_STATUS
+	 * Word 2: MSG_LEN, PID_SID, MSG_ID[0], MSG_ID[1]
+	 * Word 3+: DATA bytes, CRC
+	 */
+	hdr = (struct tibbus_rx_header *)rx_buf;
+	msg_data = &rx_buf[sizeof(struct tibbus_rx_header)];
+	msg_id = sys_get_be16(msg_data);
+
+	LOG_DBG("RX: addr=0x%02X, msg_id=0x%04X, len=%u", hdr->target_addr, msg_id, hdr->msg_len);
+
+	struct ti_bshbus_data *data = dev->data;
+	if (data->rx.cb) {
+		struct bshbus_frame frame;
+		uint8_t payload_len = (hdr->msg_len > 2) ? (hdr->msg_len - 2) : 0;
+
+		bshbus_prepare_frame_dbus2_rx(&frame, hdr->target_addr, msg_id,
+					      payload_len, &msg_data[2]);
+
+		/* Forward received message */
+		data->rx.cb(dev, &frame, data->rx.user_data);
+	}
+
+	return 0;
+}
+
 static int tibbus_handle_irq(const struct device *dev)
 {
 	uint32_t global_flags;
@@ -1025,6 +1178,10 @@ static int tibbus_handle_irq(const struct device *dev)
 			LOG_ERR("Failed to clear IF: %d", ret);
 			return ret;
 		}
+	}
+
+	if (dbus_flags & TIBBUS_DBUS_IR_RF0N_MASK) {
+		tibbus_read_rx_message(dev);
 	}
 
 	if (dbus_flags & TIBBUS_DBUS_IR_RF0L_MASK) {
@@ -1178,6 +1335,8 @@ static DEVICE_API(bshbus, tibbus_driver_api) = {
 	.dbus2_send = tibbus_send,
 	.dbus2_add_receiver = tibbus_add_receiver,
 	.dbus2_remove_receiver = tibbus_remove_receiver,
+	.dbus2_register_node = tibbus_register_node,
+	.dbus2_unregister_node = tibbus_unregister_node,
 };
 
 #define TIBBUS_INIT(inst) \
