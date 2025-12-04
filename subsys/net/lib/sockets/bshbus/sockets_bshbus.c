@@ -400,10 +400,7 @@ static ssize_t zbshbus_recvfrom_ctx(struct net_context *ctx, void *buf,
 		recv_len = max_len;
 	}
 
-/* TODO prüfen ob hier wirklich abgebrochen wird */
 	NET_ASSERT(recv_len == sizeof(struct bshbus_frame));
-
-LOG_DBG("frame format %d", bshbus_frame_get_flag((struct bshbus_frame *)pkt->frags->data));
 
 	if (net_pkt_read(pkt, buf, recv_len)) {
 		net_pkt_unref(pkt);
@@ -478,6 +475,50 @@ static struct bshbus_recv *get_receiver(const struct net_context *ctx)
 	LOG_ERR("All receivers occupied");
 
 	return NULL;
+}
+
+static void free_dbus2_receiver_list(struct bshbus_recv *receiver)
+{
+    struct bshbus_dbus2_recv *dbus2_recv;
+    struct bshbus_dbus2_recv *next;
+
+    if (!receiver || !receiver->dbus2_recv) {
+        return;
+    }
+
+    dbus2_recv = receiver->dbus2_recv;
+
+    while (dbus2_recv) {
+        next = dbus2_recv->next;
+        k_free(dbus2_recv);
+        dbus2_recv = next;
+    }
+
+    receiver->dbus2_recv = NULL;
+}
+
+static void cleanup_dbus2_receiver_partial(struct bshbus_recv *receiver, uint16_t id_order_limit)
+{
+    struct bshbus_dbus2_recv *dbus2_recv;
+    struct bshbus_dbus2_recv *prev = NULL;
+    struct bshbus_dbus2_recv *next;
+
+    if (!receiver || !receiver->dbus2_recv) {
+        return;
+    }
+
+    dbus2_recv = receiver->dbus2_recv;
+
+    while (dbus2_recv && dbus2_recv->id_order < id_order_limit) {
+        next = dbus2_recv->next;
+        k_free(dbus2_recv);
+        dbus2_recv = next;
+    }
+
+    /* Update list head if we freed from the beginning */
+    if (!prev) {
+        receiver->dbus2_recv = dbus2_recv;
+    }
 }
 
 static int create_dbus2_receiver_entry(struct bshbus_recv *receiver,
@@ -569,64 +610,62 @@ static int create_dbus2_receiver(struct bshbus_recv *receiver,
 
 		ret = create_dbus2_receiver_entry(receiver, id_order, id_mask);
 		if (ret) {
-			goto free_msg_id_ranges;
+			cleanup_dbus2_receiver_partial(receiver, id_order);
+			LOG_ERR("Failed to create receiver entries");
+			return ret;
 		}
 	}
 
-	return ret;
-
-free_msg_id_ranges:
-	/* TODO: Alle IDs wieder freigeben */
-	return ret;
+	return 0;
 }
 
 static int bshbus2_add_receiver(struct net_context *ctx, int level, int optname,
-							const struct bshbus_dbus2_msg_id_range *id_range, socklen_t optlen)
+                            const struct bshbus_dbus2_msg_id_range *id_range, socklen_t optlen)
 {
-	const struct bshbus_api *api;
-	const struct device *dev;
-	struct bshbus_recv *receiver;
-	int ret;
+    const struct bshbus_api *api;
+    const struct device *dev;
+    struct bshbus_recv *receiver;
+    int ret;
 
-	if (!id_range || optlen != sizeof(*id_range)) {
-		LOG_ERR("Invalid message ID range structure");
-		return -EINVAL;
-	}
+    if (!id_range || optlen != sizeof(*id_range)) {
+        LOG_ERR("Invalid message ID range structure");
+        return -EINVAL;
+    }
 
-	if (id_range->msg_id_start > id_range->msg_id_end) {
-		LOG_ERR("Invalid message ID range, start: %04x, end %04x\n",
-			id_range->msg_id_start, id_range->msg_id_end);
-			return -EINVAL;
-	}
+    if (id_range->msg_id_start > id_range->msg_id_end) {
+        LOG_ERR("Invalid message ID range, start: %04x, end %04x\n",
+            id_range->msg_id_start, id_range->msg_id_end);
+            return -EINVAL;
+    }
 
-	/* TODO Pürfen ob Message ID frei ist */
+    receiver = get_receiver(ctx);
+    if (!receiver) {
+        return -EBUSY;
+    }
 
-	receiver = get_receiver(ctx);
-	if (!receiver) {
-		return -EBUSY;
-	}
+    ret = create_dbus2_receiver(receiver, id_range->msg_id_start, id_range->msg_id_end);
+    if (ret) {
+        LOG_ERR("Create receiver failed: %d", ret);
+        return ret;
+    }
 
-	ret = create_dbus2_receiver(receiver, id_range->msg_id_start, id_range->msg_id_end);
-	if (ret) {
-		LOG_ERR("Create receiver failed: %d", ret);
-		return ret;
-	}
+    if (!receiver->ctx) {
+        receiver->iface = net_context_get_iface(ctx);
+        receiver->ctx = ctx;
+    }
 
-	if (!receiver->ctx) {
-		receiver->iface = net_context_get_iface(ctx);
-		receiver->ctx = ctx;
-	}
+    dev = net_if_get_device(receiver->iface);
+    api = dev->api;
 
-	dev = net_if_get_device(receiver->iface);
-	api = dev->api;
+    ret = api->setsockopt(dev, ctx, level, optname, id_range, optlen);
+    if (ret) {
+        LOG_ERR("Adding D-Bus-2 receiver failed: %d", ret);
+        /* Clean up the receiver list on driver failure */
+        free_dbus2_receiver_list(receiver);
+        return ret;
+    }
 
-	ret = api->setsockopt(dev, ctx, level, optname, id_range, optlen);
-	if (ret) {
-		LOG_ERR("Adding D-Bus-2 receiver failed: %d", ret);
-		/* TODO clean up new receiver */
-	}
-
-	return ret;
+    return 0;
 }
 
 static int bshbus2_register_node(struct net_context *ctx, int level, int optname,
@@ -725,19 +764,22 @@ static int bshbus_sock_setsockopt_vmeth(void *obj, int level, int optname,
 
 static int bshbus_close_socket(struct net_context *ctx)
 {
-	int i, ret = 0;
+    int i, ret = 0;
 
-	for (i = 0; i < ARRAY_SIZE(receivers); i++) {
-		if (receivers[i].ctx == ctx &&
-			receivers[i].iface == net_context_get_iface(ctx)) {
-				ret = unregister_bshbus_receiver(&receivers[i]);
-				if (!ret) {
-					receivers[i].ctx = NULL;
-				}
-			}
-	}
+    for (i = 0; i < ARRAY_SIZE(receivers); i++) {
+        if (receivers[i].ctx == ctx &&
+            receivers[i].iface == net_context_get_iface(ctx)) {
+            free_dbus2_receiver_list(&receivers[i]);
 
-	return ret;
+            receivers[i].ctx = NULL;
+            receivers[i].iface = NULL;
+            receivers[i].node_address = 0;
+            receivers[i].proto_id = 0;
+            receivers[i].proto_receiver = NULL;
+        }
+    }
+
+    return ret;
 }
 
 static int bshbus_sock_close_vmeth(void *obj)

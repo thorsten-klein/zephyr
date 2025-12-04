@@ -7,6 +7,8 @@ LOG_MODULE_REGISTER(net_sock_bshbus2, CONFIG_NET_SOCKETS_LOG_LEVEL);
 #include <zephyr/net/socket.h>
 #include <zephyr/net/bshbus/bshbus_proto_dbus2.h>
 
+//TODO: Rework this file
+
 struct bshbus2_recv {
 	struct bshbus2_proto *proto;
 };
