@@ -146,8 +146,8 @@ static int zbshbus_socket(int family, int type, int proto)
 	k_condvar_init(&ctx->cond.recv);
 
 	zvfs_finalize_typed_fd(fd, ctx,
-			    (const struct fd_op_vtable *)&bshbus_sock_fd_op_vtable,
-			    ZVFS_MODE_IFSOCK);
+				(const struct fd_op_vtable *)&bshbus_sock_fd_op_vtable,
+				ZVFS_MODE_IFSOCK);
 
 	return fd;
 }
@@ -181,9 +181,9 @@ static bool dbus2_rx_check_deliver(uint16_t msg_id, struct bshbus_recv *receiver
 }
 
 static void zbshbus_received_cb(struct net_context *ctx, struct net_pkt *pkt,
-			     union net_ip_header *ip_hdr,
-			     union net_proto_header *proto_hdr,
-			     int status, void *user_data)
+				 union net_ip_header *ip_hdr,
+				 union net_proto_header *proto_hdr,
+				 int status, void *user_data)
 {
 	struct bshbus_frame *frame = (struct bshbus_frame *)net_pkt_data(pkt);
 	int i;
@@ -290,7 +290,7 @@ static int zbshbus_bind_ctx(struct net_context *ctx, const struct sockaddr *addr
 	/* For BSH Bus socket, we expect to receive packets after call to bind().
 	 */
 	ret = net_context_recv(ctx, zbshbus_received_cb, K_NO_WAIT,
-			       ctx->user_data);
+				   ctx->user_data);
 	if (ret < 0) {
 		errno = -ret;
 		return -1;
@@ -414,7 +414,7 @@ static ssize_t zbshbus_recvfrom_ctx(struct net_context *ctx, void *buf,
 }
 
 static int zbshbus_getsockopt_ctx(struct net_context *ctx, int level, int optname,
-			       void *optval, socklen_t *optlen)
+				   void *optval, socklen_t *optlen)
 {
 	if (!optval || !optlen) {
 		errno = EINVAL;
@@ -422,11 +422,11 @@ static int zbshbus_getsockopt_ctx(struct net_context *ctx, int level, int optnam
 	}
 
 	return sock_fd_op_vtable.getsockopt(ctx, level, optname,
-					    optval, optlen);
+						optval, optlen);
 }
 
 static int bshbus_sock_getsockopt_vmeth(void *obj, int level, int optname,
-				     void *optval, socklen_t *optlen)
+					 void *optval, socklen_t *optlen)
 {
 	if (level == SOL_BSHBUS_DBUS2) {
 		const struct bshbus_api *api;
@@ -448,7 +448,7 @@ static int bshbus_sock_getsockopt_vmeth(void *obj, int level, int optname,
 		} */
 
 		return api->getsockopt(dev, obj, level, optname, optval,
-				       optlen);
+					   optlen);
 	}
 
 	return zbshbus_getsockopt_ctx(obj, level, optname, optval, optlen);
@@ -479,46 +479,46 @@ static struct bshbus_recv *get_receiver(const struct net_context *ctx)
 
 static void free_dbus2_receiver_list(struct bshbus_recv *receiver)
 {
-    struct bshbus_dbus2_recv *dbus2_recv;
-    struct bshbus_dbus2_recv *next;
+	struct bshbus_dbus2_recv *dbus2_recv;
+	struct bshbus_dbus2_recv *next;
 
-    if (!receiver || !receiver->dbus2_recv) {
-        return;
-    }
+	if (!receiver || !receiver->dbus2_recv) {
+		return;
+	}
 
-    dbus2_recv = receiver->dbus2_recv;
+	dbus2_recv = receiver->dbus2_recv;
 
-    while (dbus2_recv) {
-        next = dbus2_recv->next;
-        k_free(dbus2_recv);
-        dbus2_recv = next;
-    }
+	while (dbus2_recv) {
+		next = dbus2_recv->next;
+		k_free(dbus2_recv);
+		dbus2_recv = next;
+	}
 
-    receiver->dbus2_recv = NULL;
+	receiver->dbus2_recv = NULL;
 }
 
 static void cleanup_dbus2_receiver_partial(struct bshbus_recv *receiver, uint16_t id_order_limit)
 {
-    struct bshbus_dbus2_recv *dbus2_recv;
-    struct bshbus_dbus2_recv *prev = NULL;
-    struct bshbus_dbus2_recv *next;
+	struct bshbus_dbus2_recv *dbus2_recv;
+	struct bshbus_dbus2_recv *prev = NULL;
+	struct bshbus_dbus2_recv *next;
 
-    if (!receiver || !receiver->dbus2_recv) {
-        return;
-    }
+	if (!receiver || !receiver->dbus2_recv) {
+		return;
+	}
 
-    dbus2_recv = receiver->dbus2_recv;
+	dbus2_recv = receiver->dbus2_recv;
 
-    while (dbus2_recv && dbus2_recv->id_order < id_order_limit) {
-        next = dbus2_recv->next;
-        k_free(dbus2_recv);
-        dbus2_recv = next;
-    }
+	while (dbus2_recv && dbus2_recv->id_order < id_order_limit) {
+		next = dbus2_recv->next;
+		k_free(dbus2_recv);
+		dbus2_recv = next;
+	}
 
-    /* Update list head if we freed from the beginning */
-    if (!prev) {
-        receiver->dbus2_recv = dbus2_recv;
-    }
+	/* Update list head if we freed from the beginning */
+	if (!prev) {
+		receiver->dbus2_recv = dbus2_recv;
+	}
 }
 
 static int create_dbus2_receiver_entry(struct bshbus_recv *receiver,
@@ -620,56 +620,56 @@ static int create_dbus2_receiver(struct bshbus_recv *receiver,
 }
 
 static int bshbus2_add_receiver(struct net_context *ctx, int level, int optname,
-                            const struct bshbus_dbus2_msg_id_range *id_range, socklen_t optlen)
+							const struct bshbus_dbus2_msg_id_range *id_range, socklen_t optlen)
 {
-    const struct bshbus_api *api;
-    const struct device *dev;
-    struct bshbus_recv *receiver;
-    int ret;
+	const struct bshbus_api *api;
+	const struct device *dev;
+	struct bshbus_recv *receiver;
+	int ret;
 
-    if (!id_range || optlen != sizeof(*id_range)) {
-        LOG_ERR("Invalid message ID range structure");
-        return -EINVAL;
-    }
+	if (!id_range || optlen != sizeof(*id_range)) {
+		LOG_ERR("Invalid message ID range structure");
+		return -EINVAL;
+	}
 
-    if (id_range->msg_id_start > id_range->msg_id_end) {
-        LOG_ERR("Invalid message ID range, start: %04x, end %04x\n",
-            id_range->msg_id_start, id_range->msg_id_end);
-            return -EINVAL;
-    }
+	if (id_range->msg_id_start > id_range->msg_id_end) {
+		LOG_ERR("Invalid message ID range, start: %04x, end %04x\n",
+			id_range->msg_id_start, id_range->msg_id_end);
+			return -EINVAL;
+	}
 
-    receiver = get_receiver(ctx);
-    if (!receiver) {
-        return -EBUSY;
-    }
+	receiver = get_receiver(ctx);
+	if (!receiver) {
+		return -EBUSY;
+	}
 
-    ret = create_dbus2_receiver(receiver, id_range->msg_id_start, id_range->msg_id_end);
-    if (ret) {
-        LOG_ERR("Create receiver failed: %d", ret);
-        return ret;
-    }
+	ret = create_dbus2_receiver(receiver, id_range->msg_id_start, id_range->msg_id_end);
+	if (ret) {
+		LOG_ERR("Create receiver failed: %d", ret);
+		return ret;
+	}
 
-    if (!receiver->ctx) {
-        receiver->iface = net_context_get_iface(ctx);
-        receiver->ctx = ctx;
-    }
+	if (!receiver->ctx) {
+		receiver->iface = net_context_get_iface(ctx);
+		receiver->ctx = ctx;
+	}
 
-    dev = net_if_get_device(receiver->iface);
-    api = dev->api;
+	dev = net_if_get_device(receiver->iface);
+	api = dev->api;
 
-    ret = api->setsockopt(dev, ctx, level, optname, id_range, optlen);
-    if (ret) {
-        LOG_ERR("Adding D-Bus-2 receiver failed: %d", ret);
-        /* Clean up the receiver list on driver failure */
-        free_dbus2_receiver_list(receiver);
-        return ret;
-    }
+	ret = api->setsockopt(dev, ctx, level, optname, id_range, optlen);
+	if (ret) {
+		LOG_ERR("Adding D-Bus-2 receiver failed: %d", ret);
+		/* Clean up the receiver list on driver failure */
+		free_dbus2_receiver_list(receiver);
+		return ret;
+	}
 
-    return 0;
+	return 0;
 }
 
 static int bshbus2_register_node(struct net_context *ctx, int level, int optname,
-			       const uint8_t *node_address, socklen_t optlen)
+				   const uint8_t *node_address, socklen_t optlen)
 {
 	const struct bshbus_api *api;
 	const struct device *dev;
@@ -717,7 +717,7 @@ static int bshbus2_register_node(struct net_context *ctx, int level, int optname
 }
 
 static int zbshbus_setsockopt_ctx(struct net_context *ctx, int level, int optname,
-			       const void *optval, socklen_t optlen)
+				   const void *optval, socklen_t optlen)
 {
 	const struct bshbus_api *api;
 	struct net_if *iface;
@@ -757,29 +757,31 @@ static int zbshbus_setsockopt_ctx(struct net_context *ctx, int level, int optnam
 }
 
 static int bshbus_sock_setsockopt_vmeth(void *obj, int level, int optname,
-				     const void *optval, socklen_t optlen)
+					 const void *optval, socklen_t optlen)
 {
 	return zbshbus_setsockopt_ctx(obj, level, optname, optval, optlen);
 }
 
 static int bshbus_close_socket(struct net_context *ctx)
 {
-    int i, ret = 0;
+	int i, ret = 0;
 
-    for (i = 0; i < ARRAY_SIZE(receivers); i++) {
-        if (receivers[i].ctx == ctx &&
-            receivers[i].iface == net_context_get_iface(ctx)) {
-            free_dbus2_receiver_list(&receivers[i]);
+	// TODO: sync with recv
 
-            receivers[i].ctx = NULL;
-            receivers[i].iface = NULL;
-            receivers[i].node_address = 0;
-            receivers[i].proto_id = 0;
-            receivers[i].proto_receiver = NULL;
-        }
-    }
+	for (i = 0; i < ARRAY_SIZE(receivers); i++) {
+		if (receivers[i].ctx == ctx &&
+			receivers[i].iface == net_context_get_iface(ctx)) {
+			free_dbus2_receiver_list(&receivers[i]);
 
-    return ret;
+			receivers[i].ctx = NULL;
+			receivers[i].iface = NULL;
+			receivers[i].node_address = 0;
+			receivers[i].proto_id = 0;
+			receivers[i].proto_receiver = NULL;
+		}
+	}
+
+	return ret;
 }
 
 static int bshbus_sock_close_vmeth(void *obj)
@@ -803,28 +805,28 @@ static int bshbus_sock_ioctl_vmeth(void *obj, unsigned int request, va_list args
 }
 
 static int bshbus_sock_bind_vmeth(void *obj, const struct sockaddr *addr,
-			       socklen_t addrlen)
+				   socklen_t addrlen)
 {
 	return zbshbus_bind_ctx(obj, addr, addrlen);
 }
 
 static ssize_t bshbus_sock_write_vmeth(void *obj, const void *buffer,
-				    size_t count)
+					size_t count)
 {
 	return zbshbus_sendto_ctx(obj, buffer, count, 0, NULL, 0);
 }
 
 static ssize_t bshbus_sock_sendto_vmeth(void *obj, const void *buf, size_t len,
-				     int flags,
-				     const struct sockaddr *dest_addr,
-				     socklen_t addrlen)
+					 int flags,
+					 const struct sockaddr *dest_addr,
+					 socklen_t addrlen)
 {
 	return zbshbus_sendto_ctx(obj, buf, len, flags, dest_addr, addrlen);
 }
 
 static ssize_t bshbus_sock_recvfrom_vmeth(void *obj, void *buf, size_t max_len,
-				       int flags, struct sockaddr *src_addr,
-				       socklen_t *addrlen)
+					   int flags, struct sockaddr *src_addr,
+					   socklen_t *addrlen)
 {
 	return zbshbus_recvfrom_ctx(obj, buf, max_len, flags, src_addr, addrlen);
 }
@@ -852,4 +854,4 @@ static bool bshbus_is_supported(int family, int type, int proto)
 }
 
 NET_SOCKET_REGISTER(af_bshbus, NET_SOCKET_DEFAULT_PRIO, AF_BSHBUS,
-		    bshbus_is_supported, zbshbus_socket);
+			bshbus_is_supported, zbshbus_socket);
