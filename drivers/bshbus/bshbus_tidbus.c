@@ -320,10 +320,9 @@ static int tibbus_read_reg(const struct device *dev, uint16_t addr, uint32_t *va
 	tibbus_set_spi_hdr(tx_buf, addr, TIBBUS_REG_SIZE, TIBBUS_READ_L);
 
 	int ret = tibbus_transceive(dev, tx_buf, len, rx_buf, len);
-	if (ret) {
-		*val = sys_get_be32(&rx_buf[TIBBUS_SPI_HDR_SIZE]);
+	if (ret == 0) {
+	    *val = sys_get_be32(&rx_buf[TIBBUS_SPI_HDR_SIZE]);
 	}
-
 	return ret;
 }
 
