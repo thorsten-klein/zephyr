@@ -28,9 +28,7 @@ struct net_bshbus_config {
 
 static void net_bshbus_close(const struct device *dev, int filter_id)
 {
-//	const struct net_bus_config *cfg = dev->config;
-
-//	can_remove_rx_filter(cfg->can_dev, filter_id);
+	// TODO Clarify if with System Architects if we should unregister the node(s) here
 }
 
 static void net_bshbus_dbus2_recv(const struct device *dev, struct bshbus_frame *frame, void *user_data)

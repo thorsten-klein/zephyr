@@ -436,14 +436,14 @@ static int tibbus_set_mode_standby(const struct device *dev)
 
 	/* Send without CRC */
 	ret = tibbus_transceive(dev, tx_buf, TIBBUS_SPI_HDR_SIZE + TIBBUS_REG_SIZE, NULL, 0);
-	if (ret != 0) {
-		LOG_WARN("STANDBY command (no CRC) failed: %d", ret);
+	if (ret) {
+		LOG_WRN("STANDBY command (no CRC) failed: %d", ret);
 		return ret;
 	}
 
 	/* Send with CRC */
 	ret = tibbus_transceive(dev, tx_buf, TIBBUS_SPI_HDR_SIZE + TIBBUS_REG_SIZE * 2, NULL, 0);
-	if (ret != 0) {
+	if (ret) {
 		LOG_ERR("STANDBY command (with CRC) failed: %d", ret);
 		return ret;
 	}
@@ -488,7 +488,7 @@ static int tibbus_disable_spi_crc(const struct device *dev)
 	/* Send without CRC */
 	ret = tibbus_transceive(dev, tx_buf, TIBBUS_SPI_HDR_SIZE + TIBBUS_REG_SIZE, NULL, 0);
 	if (ret) {
-		LOG_WARN("Disable SPI CRC (no CRC) failed: %d", ret);
+		LOG_WRN("Disable SPI CRC (no CRC) failed: %d", ret);
 		return ret;
 	}
 
@@ -535,7 +535,7 @@ static int tibbus_set_mode_normal(const struct device *dev)
 		reg_val &= ~TIBBUS_MOPC_MODE_SEL_MASK;
 		reg_val |= (2u << TIBBUS_MOPC_MODE_SEL_POS);
 		ret = tibbus_write_reg(dev, TIBBUS_MOPC_ADDR, reg_val);
-		if (ret != 0) {
+		if (ret) {
 			return ret;
 		}
 	}
@@ -585,7 +585,7 @@ static int tibbus_do_reset(const struct device *dev)
 	int ret;
 
 	ret = tibbus_read_reg(dev, TIBBUS_IF_ADDR, &reg_val);
-	if (ret != 0) {
+	if (ret) {
 		return ret;
 	}
 
@@ -605,7 +605,7 @@ static int tibbus_do_reset(const struct device *dev)
 	bool is_pwr_on_reset = ((reg_val & TIBBUS_IF_PWRON_MASK) != 0u);
 
 	ret = tibbus_read_reg(dev, TIBBUS_DBUS_DPC_ADDR, &reg_val);
-	if (ret != 0) {
+	if (ret) {
 		return ret;
 	}
 
@@ -898,7 +898,7 @@ static int tibbus_configure_dbus(const struct device *dev, tibbus_cfg cfg) // TO
 		if ((curr_cfg.word & TIBBUS_EEP_BITS_REG_DBUS_DPC_MASK) !=
 		    (cfg.word & TIBBUS_EEP_BITS_REG_DBUS_DPC_MASK)) {
 			ret = tibbus_read_reg(dev, TIBBUS_DBUS_DPC_ADDR, &reg_val);
-			if (ret != 0) {
+			if (ret) {
 				return ret;
 			}
 			reg_val &= ~TIBBUS_DBUS_DPC_ADV_PWR_MGMT_MASK;
@@ -910,7 +910,7 @@ static int tibbus_configure_dbus(const struct device *dev, tibbus_cfg cfg) // TO
 			reg_val &= ~TIBBUS_DBUS_DPC_BVD_TO_NWKRQ_MASK;
 			reg_val |= ((uint32_t)cfg.BVD_TO_NWKRQ << TIBBUS_DBUS_DPC_BVD_TO_NWKRQ_POS);
 			ret = tibbus_write_reg(dev, TIBBUS_DBUS_DPC_ADDR, reg_val);
-			if (ret != 0) {
+			if (ret) {
 				return ret;
 			}
 		}
@@ -1146,7 +1146,7 @@ int tibbus_send(const struct device *dev, const struct bshbus_frame_dbus2_tx *tx
 	data->tx.cb = cb;
 
 	ret = tibbus_write_data(dev, TIBBUS_DBUS_RX_TX_FIFO_ADDR, tx_buf, frame_size);
-	if (ret != 0) {
+	if (ret) {
 		LOG_ERR("Failed to write TX FIFO: %d", ret);
 		return ret;
 	}
@@ -1233,7 +1233,7 @@ static int tibbus_init_irq_gpio(const struct device *dev)
 			   BIT(config->irq_gpio.pin));
 
 	ret = gpio_add_callback(config->irq_gpio.port, &data->int_gpio_cb);
-	if (ret != 0) {
+	if (ret) {
 		LOG_ERR("Failed to add GPIO callback: %d", ret);
 		return ret;
 	}
@@ -1327,7 +1327,7 @@ static int tibbus_read_tx_status(const struct device *dev)
 	}
 
 	ret = tibbus_read_data(dev, TIBBUS_DBUS_TXSF_ADDR, tx_buf, TIBBUS_DBUS_TXSF_SIZE);
-	if (ret != 0) {
+	if (ret) {
 		LOG_ERR("Failed to read TX status: %d", ret);
 		return ret;
 	}
@@ -1458,7 +1458,7 @@ static int tibbus_init(const struct device *dev)
 	tibbus_data->dev = dev;
 
 	ret = tibbus_init_irq_gpio(dev);
-	if (ret != 0) {
+	if (ret) {
 		return ret;
 	}
 
@@ -1534,13 +1534,13 @@ static int tibbus_init(const struct device *dev)
 
 	/* Lock configuration registers for write access */
 	ret = tibbus_disable_cfg_dbus(dev);
-	if (ret != 0) {
+	if (ret) {
 		LOG_ERR("Failed to disable DBus config: %d", ret);
 		return ret;
 	}
 
 	ret = tibbus_set_mode_normal(dev);
-	if (ret != 0) {
+	if (ret) {
 		LOG_ERR("Failed to set Normal mode: %d", ret);
 		return ret;
 	}
