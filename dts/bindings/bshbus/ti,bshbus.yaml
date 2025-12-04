@@ -26,7 +26,6 @@ properties:
     enum:
       - 20000000
       - 40000000
-    required: true
     description: |
       Controller oscillator clock frequency in Hz (20MHz or 40MHz).
 
