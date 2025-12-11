@@ -43,7 +43,7 @@ struct bshbus_recv {
 #endif
 };
 
-// Compile Zeit
+/* TODO: Use later
 static struct bshbus_proto protocols[] = {
 #if defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2) || \
 	defined(CONFIG_NET_SOCKETS_BSHBUS_DBUS2_DUMMY)
@@ -52,7 +52,7 @@ static struct bshbus_proto protocols[] = {
 		.unregister_receiver = bshbus2_unregister_receiver
 	}
 #endif
-};
+}; */
 
 #define BSHBUS_MAX_RECEIVERS \
 	CONFIG_NET_SOCKETS_BSHBUS2_RECEIVERS + \
@@ -85,6 +85,7 @@ static inline uint16_t bshbus_dbus2_get_id_order(uint16_t msg_id)
 	return (msg_id / BSHBUS2_IDS_PER_ORDER);
 }
 
+/* TODO: Use later
 static int unregister_bshbus_receiver(struct bshbus_recv *receiver)
 {
 	int ret = 0;
@@ -106,7 +107,7 @@ static int unregister_bshbus_receiver(struct bshbus_recv *receiver)
 	}
 
 	return ret;
-}
+} */
 
 static inline int k_fifo_wait_non_empty(struct k_fifo *fifo, k_timeout_t timeout)
 {
