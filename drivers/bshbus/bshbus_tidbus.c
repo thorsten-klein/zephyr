@@ -1560,10 +1560,10 @@ static DEVICE_API(bshbus, tibbus_driver_api) = {
 };
 
 #define TIBBUS_INIT(inst) \
-	static const struct ti_bshbus_config tibbus_config_##inst = { \
-		.spi = SPI_DT_SPEC_INST_GET(inst, SPI_WORD_SET(8), 0), \
-		.irq_gpio = GPIO_DT_SPEC_INST_GET(inst, irq_gpios), \
-	}; \
+    static const struct ti_bshbus_config tibbus_config_##inst = { \
+        .spi = SPI_DT_SPEC_INST_GET(inst, SPI_WORD_SET(8) | SPI_OP_MODE_MASTER, /* no delay */), \
+        .irq_gpio = GPIO_DT_SPEC_INST_GET(inst, irq_gpios), \
+    }; \
 	\
 	static struct ti_bshbus_data tibbus_data_##inst; \
 	\
