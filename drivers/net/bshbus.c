@@ -20,6 +20,7 @@ LOG_MODULE_REGISTER(net_bshbus, CONFIG_NET_BSHBUS_LOG_LEVEL);
 
 struct net_bshbus_context {
 	struct net_if *iface;
+	struct k_fifo pending_tx_pkts;
 };
 
 struct net_bshbus_config {
@@ -67,11 +68,10 @@ static void net_bshbus_dbus2_recv(const struct device *dev, struct bshbus_frame 
 }
 
 static void net_bshbus_dbus2_send_cb(const struct device *dev, uint16_t status,
-			void *user_data) //TODO könnte nach dbus2 specific
+			void *user_data)
 {
-	ARG_UNUSED(dev);
-
-	struct net_pkt *tx_pkt = (struct net_pkt *)user_data;
+	struct net_bshbus_context *ctx = (struct net_bshbus_context *)user_data;
+	struct net_pkt *tx_pkt = NULL;
 	struct net_pkt *tx_ind_pkt = NULL;
 	struct bshbus_frame *tx_frame;
 	struct bshbus_frame tx_ind_frame = {0};
@@ -79,8 +79,9 @@ static void net_bshbus_dbus2_send_cb(const struct device *dev, uint16_t status,
 
 	LOG_DBG("...send message on %s finished: %d", dev->name, status);
 
+	tx_pkt = k_fifo_get(&ctx->pending_tx_pkts, K_NO_WAIT);
 	if (!tx_pkt) {
-		LOG_ERR("Packet is invalid");
+		LOG_ERR("No pending packet found");
 		return;
 	}
 
@@ -88,7 +89,8 @@ static void net_bshbus_dbus2_send_cb(const struct device *dev, uint16_t status,
 						AF_BSHBUS, 0, K_NO_WAIT);
 	if (!tx_ind_pkt) {
 		LOG_ERR("Allocate TX IND packet failed");
-		goto free_pkt;
+		net_pkt_unref(tx_pkt);
+		return;
 	}
 
 	tx_frame = (struct bshbus_frame *)tx_pkt->frags->data;
@@ -103,29 +105,23 @@ static void net_bshbus_dbus2_send_cb(const struct device *dev, uint16_t status,
 
 	if (net_pkt_write(tx_ind_pkt, &tx_ind_frame, sizeof(tx_ind_frame))) {
 		LOG_ERR("Failed to append TX_IND data");
-		goto free_pkt;
+		net_pkt_unref(tx_pkt);
+		net_pkt_unref(tx_ind_pkt);
+		return;
 	}
 
 	ret = net_recv_data(tx_pkt->iface, tx_ind_pkt);
 	if (ret < 0) {
 		LOG_DBG("net_recv_data failed: %d", ret);
-		goto free_pkt;
-	}
-
-	net_pkt_unref(tx_pkt);
-
-	return;
-
-free_pkt:
-	net_pkt_unref(tx_pkt);
-
-	if (tx_ind_pkt) {
 		net_pkt_unref(tx_ind_pkt);
 	}
+
+	net_pkt_unref(tx_pkt);
 }
 
-static int net_bshbus_dbus2_send(const struct device *dev, struct net_pkt *pkt) // TODO könnte nach dbus2 specific
+static int net_bshbus_dbus2_send(const struct device *dev, struct net_pkt *pkt)
 {
+	struct net_bshbus_context *ctx = net_if_get_device(pkt->iface)->data;
 	struct bshbus_frame *frame = (struct bshbus_frame *)pkt->frags->data;
 	struct net_pkt *cb_pkt;
 
@@ -135,6 +131,8 @@ static int net_bshbus_dbus2_send(const struct device *dev, struct net_pkt *pkt) 
 		return -ENOMEM;
 	}
 
+	k_fifo_put(&ctx->pending_tx_pkts, cb_pkt);
+
 	LOG_DBG("flag: %d", bshbus_frame_get_flag(frame));
 	LOG_DBG("reserved: %d", frame->reserved);
 	LOG_DBG("unique_id: %d", bshbus_frame_to_dbus2_tx(frame)->unique_id);
@@ -142,7 +140,7 @@ static int net_bshbus_dbus2_send(const struct device *dev, struct net_pkt *pkt) 
 	LOG_DBG("msg_id: %04x", bshbus_frame_to_dbus2_tx(frame)->msg_id);
 	LOG_DBG("dlen: %d", bshbus_frame_to_dbus2_tx(frame)->dlen);
 
-	return bshbus_dbus2_send(dev, &frame->tx, net_bshbus_dbus2_send_cb, cb_pkt);
+	return bshbus_dbus2_send(dev, &frame->tx, net_bshbus_dbus2_send_cb, ctx);
 }
 
 static int net_bshbus_send(const struct device *dev, struct net_pkt *pkt)
@@ -185,6 +183,7 @@ static void net_bshbus_iface_init(struct net_if *iface)
 	struct net_bshbus_context *ctx = dev->data;
 
 	ctx->iface = iface;
+	k_fifo_init(&ctx->pending_tx_pkts);
 
 	LOG_DBG("Init BSHBus interface for %s", dev->name);
 }
