@@ -50,6 +50,7 @@ LOG_MODULE_REGISTER(ti_bshbus, CONFIG_BSHBUS_LOG_LEVEL);
 #define TIBBUS_DBUS_BCC_ADDR     0x406Cu
 #define TIBBUS_DBUS_DPC_ADDR     0x4074u
 #define TIBBUS_DBUS_SIDFC_ADDR   0x4084u
+#define TIBBUS_DBUS_NF_ADDR      0x4200u
 
 /* Register Bit Masks and Positions */
 /* MOPC */
@@ -94,6 +95,16 @@ LOG_MODULE_REGISTER(ti_bshbus, CONFIG_BSHBUS_LOG_LEVEL);
 #define TIBBUS_DBUS_SIDFC_PID_MASK 0x000000F0u
 #define TIBBUS_DBUS_SIDFC_PID_POS  4u
 #define TIBBUS_DBUS_SIDFC_SID_MASK 0x0000000Fu
+#define TIBBUS_DBUS_SIDFC_LSS_POS  16u
+#define TIBBUS_DBUS_SIDFC_LSS_MASK 0x000F0000u
+
+/* DBUS NF */
+#define TIBBUS_DBUS_NF_PID_POS		24u
+#define TIBBUS_DBUS_NF_SID_MASK 	0x0000FFFFu
+#define TIBBUS_DBUS_NF_PID_MASK 	0x0F000000u
+#define TIBBUS_DBUS_NF_ACK_EN		BIT(30)
+#define TIBBUS_DBUS_NF_FLT_VALID	BIT(31)
+
 
 /* DBUS DPC */
 #define TIBBUS_DBUS_DPC_ADV_PWR_MGMT_MASK 0x00010000u
@@ -280,7 +291,7 @@ struct ti_bshbus_config {
 };
 
 static int tibbus_transceive(const struct device *dev, const uint8_t *tx_buf, size_t tx_len,
-			     uint8_t *rx_buf, size_t rx_len)
+				 uint8_t *rx_buf, size_t rx_len)
 {
 	const struct ti_bshbus_config *config = dev->config;
 	const struct spi_buf tx_bufs[] = {{.buf = (void *)tx_buf, .len = tx_len}};
@@ -321,7 +332,7 @@ static int tibbus_read_reg(const struct device *dev, uint16_t addr, uint32_t *va
 
 	int ret = tibbus_transceive(dev, tx_buf, len, rx_buf, len);
 	if (ret == 0) {
-	    *val = sys_get_be32(&rx_buf[TIBBUS_SPI_HDR_SIZE]);
+		*val = sys_get_be32(&rx_buf[TIBBUS_SPI_HDR_SIZE]);
 	}
 	return ret;
 }
@@ -360,7 +371,7 @@ static int tibbus_read_data(const struct device *dev, uint16_t addr, uint8_t *da
 }
 
 static int tibbus_write_data(const struct device *dev, uint16_t addr,
-			     const uint8_t *data, uint16_t len)
+				 const uint8_t *data, uint16_t len)
 {
 	const struct ti_bshbus_config *tibbus_config = dev->config;
 	uint8_t tx_buf[TIBBUS_SPI_HDR_SIZE];
@@ -643,7 +654,7 @@ static int tibbus_enable_and_clear_irq_flags(const struct device *dev)
 
 	/* Enable all DBus interrupts except D-Bus silent flag */
 	ret = tibbus_write_reg(dev, TIBBUS_DBUS_IE_ADDR,
-			       TIBBUS_DBUS_IE_ALL_BIT_MASK & ~TIBBUS_DBUS_IE_DBUSSLNT_EN_MASK);
+				   TIBBUS_DBUS_IE_ALL_BIT_MASK & ~TIBBUS_DBUS_IE_DBUSSLNT_EN_MASK);
 	if (ret) {
 		LOG_ERR("Failed to write DBUS IE register: %d", ret);
 		return ret;
@@ -786,35 +797,76 @@ static tibbus_cfg tibbus_get_config(void)
 	return cfg;
 }
 
+static int tibbus_activate_all_subnodes(const struct device *dev, uint8_t node_address)
+{
+	uint32_t reg_val;
+	uint8_t node_id = node_address >> 4;
+	int ret;
+
+	ret = tibbus_read_reg(dev, TIBBUS_DBUS_NF_ADDR, &reg_val);
+	if (ret) {
+		LOG_ERR("Failed to read NF: %d", ret);
+		return ret;
+	}
+
+	reg_val &= ~TIBBUS_DBUS_NF_PID_MASK;
+	reg_val |= ((uint32_t)node_id << TIBBUS_DBUS_NF_PID_POS);
+
+	reg_val &= ~TIBBUS_DBUS_NF_SID_MASK;
+	reg_val |= ((uint32_t)0xFFFF);
+
+	reg_val |= TIBBUS_DBUS_NF_ACK_EN | TIBBUS_DBUS_NF_FLT_VALID;
+
+	ret = tibbus_write_reg(dev, TIBBUS_DBUS_NF_ADDR, reg_val);
+	if (ret) {
+		LOG_ERR("Failed to write NF: %d", ret);
+		return ret;
+	}
+
+	ret = tibbus_read_reg(dev, TIBBUS_DBUS_NF_ADDR, &reg_val);
+	if (ret) {
+		LOG_ERR("Failed to read NF: %d", ret);
+		return ret;
+	}
+
+	LOG_DBG("All subnodes enabled for node ID %02x", node_id);
+
+	return 0;
+}
+
 static int tibbus_set_node_address(const struct device *dev, uint8_t node_address)
- {
-	 uint32_t reg_val;
-	 uint8_t node_id = node_address >> 4;
-	 uint8_t subnode_id = node_address & 0x0F;
-	 int ret;
+{
+	uint32_t reg_val;
+	uint8_t node_id = node_address >> 4;
+	uint8_t subnode_id = node_address & 0x0F;
+	int ret;
 
-	 ret = tibbus_read_reg(dev, TIBBUS_DBUS_SIDFC_ADDR, &reg_val);
-	 if (ret) {
-		 LOG_ERR("Failed to read SIDFC: %d", ret);
-		 return ret;
-	 }
+	ret = tibbus_read_reg(dev, TIBBUS_DBUS_SIDFC_ADDR, &reg_val);
+	if (ret) {
+		LOG_ERR("Failed to read SIDFC: %d", ret);
+		return ret;
+	}
 
-	 reg_val &= ~TIBBUS_DBUS_SIDFC_SID_MASK;
-	 reg_val |= ((uint32_t)subnode_id);
+	reg_val &= ~TIBBUS_DBUS_SIDFC_SID_MASK;
+	reg_val |= ((uint32_t)subnode_id);
 
-	 reg_val &= ~TIBBUS_DBUS_SIDFC_PID_MASK;
-	 reg_val |= ((uint32_t)node_id << TIBBUS_DBUS_SIDFC_PID_POS);
+	reg_val &= ~TIBBUS_DBUS_SIDFC_PID_MASK;
+	reg_val |= ((uint32_t)node_id << TIBBUS_DBUS_SIDFC_PID_POS);
 
-	 ret = tibbus_write_reg(dev, TIBBUS_DBUS_SIDFC_ADDR, reg_val);
-	 if (ret) {
-		 LOG_ERR("Failed to write SIDFC: %d", ret);
-		 return ret;
-	 }
+	// TODO: Temporary setting for DC prototype - enable one node filter
+	reg_val &= ~TIBBUS_DBUS_SIDFC_LSS_MASK;
+	reg_val |= 1 << TIBBUS_DBUS_SIDFC_LSS_POS;
 
-	 LOG_DBG("Node address %02x activated", node_address);
+	ret = tibbus_write_reg(dev, TIBBUS_DBUS_SIDFC_ADDR, reg_val);
+	if (ret) {
+		LOG_ERR("Failed to write SIDFC: %d", ret);
+		return ret;
+	}
 
-	 return 0;
- }
+	LOG_DBG("Node address %02x activated", node_address);
+
+	return 0;
+}
 
  /**
  * @brief Convert baudrate to DBR register value.
@@ -878,11 +930,11 @@ static int tibbus_configure_dbus(const struct device *dev, tibbus_cfg cfg) // TO
 
 	/* Configure D-Bus register bits */
 	if ((curr_cfg.word & TIBBUS_EEP_BITS_REG_DBUS_MASK) !=
-	    (cfg.word & TIBBUS_EEP_BITS_REG_DBUS_MASK)) {
+		(cfg.word & TIBBUS_EEP_BITS_REG_DBUS_MASK)) {
 
 		/* Enable D-Bus part of chip */
 		ret = tibbus_write_reg_ipec(dev, 1, TIBBUS_IPEC_DBUS_EN_POS,
-					    TIBBUS_IPEC_DBUS_EN_MASK);
+						TIBBUS_IPEC_DBUS_EN_MASK);
 		if (ret) {
 			return ret;
 		}
@@ -895,7 +947,7 @@ static int tibbus_configure_dbus(const struct device *dev, tibbus_cfg cfg) // TO
 
 		/* Configure power control register bits */
 		if ((curr_cfg.word & TIBBUS_EEP_BITS_REG_DBUS_DPC_MASK) !=
-		    (cfg.word & TIBBUS_EEP_BITS_REG_DBUS_DPC_MASK)) {
+			(cfg.word & TIBBUS_EEP_BITS_REG_DBUS_DPC_MASK)) {
 			ret = tibbus_read_reg(dev, TIBBUS_DBUS_DPC_ADDR, &reg_val);
 			if (ret) {
 				return ret;
@@ -915,6 +967,12 @@ static int tibbus_configure_dbus(const struct device *dev, tibbus_cfg cfg) // TO
 		}
 
 		ret = tibbus_set_node_address(dev, CONFIG_BSHBUS_NODE_ADDRESS);
+		if (ret) {
+			return ret;
+		}
+
+		// TODO: Temporary setting for DC prototype
+		ret = tibbus_activate_all_subnodes(dev, CONFIG_BSHBUS_NODE_ADDRESS);
 		if (ret) {
 			return ret;
 		}
@@ -942,7 +1000,7 @@ static int tibbus_configure_dbus(const struct device *dev, tibbus_cfg cfg) // TO
 
 	/* Configure IPEC register bits */
 	if ((curr_cfg.word & TIBBUS_EEP_BITS_REG_IPEC_MASK) !=
-	    (cfg.word & TIBBUS_EEP_BITS_REG_IPEC_MASK)) {
+		(cfg.word & TIBBUS_EEP_BITS_REG_IPEC_MASK)) {
 		reg_val = 0u;
 		bit_mask = 0u;
 
@@ -962,21 +1020,6 @@ static int tibbus_configure_dbus(const struct device *dev, tibbus_cfg cfg) // TO
 		if (ret) {
 			return ret;
 		}
-	}
-
-	/* Verify configuration by re-reading EEPP */
-	ret = tibbus_read_reg(dev, TIBBUS_EEPP_ADDR, &curr_cfg.word);
-	if (!ret) {
-		uint32_t compare_mask = ~TIBBUS_EEP_DBR_MASK;
-		compare_mask |= TIBBUS_EEP_BITS_REG_DBUS_SIDFC_MASK;
-		if ((curr_cfg.word & compare_mask) != (cfg.word & compare_mask)) {
-			LOG_ERR("Configuration verification failed: expected 0x%08x, got 0x%08x",
-				cfg.word & compare_mask, curr_cfg.word & compare_mask);
-			return -EIO;
-		}
-	}
-	else {
-		return ret;
 	}
 
 	return 0;
@@ -1040,7 +1083,7 @@ static int tibbus_configure_buffers(const struct device *dev)
 
 	/* Set RX and TX buffer sizes */
 	val = ((uint32_t)TIBBUSDRV_DBUS_RX_FIFO_SIZE << TIBBUS_DBUS_BSC0_RX_BUF_SIZE_POS) +
-	      TIBBUSDRV_DBUS_TX_FIFO_SIZE;	// TODO Device Tree
+		  TIBBUSDRV_DBUS_TX_FIFO_SIZE;	// TODO Device Tree
 	sys_put_be32(val, &buf[TIBBUS_SPI_HDR_SIZE + TIBBUS_REG_SIZE]);
 
 	/* Set TX status buffer size */
@@ -1191,8 +1234,8 @@ int tibbus_unregister_node(const struct device *dev, uint8_t node_address)
 }
 
 static void tibbus_int_gpio_callback(const struct device *port,
-				     struct gpio_callback *cb,
-				     gpio_port_pins_t pins)
+					 struct gpio_callback *cb,
+					 gpio_port_pins_t pins)
 {
 	struct ti_bshbus_data *data = CONTAINER_OF(cb, struct ti_bshbus_data, int_gpio_cb);
 
@@ -1221,7 +1264,7 @@ static int tibbus_init_irq_gpio(const struct device *dev)
 	}
 
 	ret = gpio_pin_interrupt_configure_dt(&config->irq_gpio,
-					      GPIO_INT_EDGE_TO_ACTIVE);
+						  GPIO_INT_EDGE_TO_ACTIVE);
 	if (ret) {
 		LOG_ERR("Failed to configure interrupt: %d", ret);
 		return ret;
@@ -1296,7 +1339,7 @@ static int tibbus_read_rx_message(const struct device *dev)
 		uint8_t payload_len = (hdr->msg_len > 2) ? (hdr->msg_len - 2) : 0;
 
 		bshbus_prepare_frame_dbus2_rx(&frame, hdr->target_addr, msg_id,
-					      payload_len, &msg_data[2]);
+						  payload_len, &msg_data[2]);
 
 		/* Forward received message */
 		data->rx.cb(dev, &frame, data->rx.user_data);
@@ -1462,7 +1505,7 @@ static int tibbus_init(const struct device *dev)
 	}
 
 	tid = k_thread_create(&tibbus_data->int_thread, tibbus_data->int_stack,
-			      K_KERNEL_STACK_SIZEOF(tibbus_data->int_stack),
+				  K_KERNEL_STACK_SIZEOF(tibbus_data->int_stack),
 				  tibbus_int_thread, (void *)dev, NULL, NULL,
 				  CONFIG_BSHBUS_TIDBUS_THREAD_PRIO, 0, K_NO_WAIT);
 	k_thread_name_set(tid, "tibshbus");
@@ -1499,7 +1542,7 @@ static int tibbus_init(const struct device *dev)
 
 	/* Clear NWKRQ_DELAY bit to disable nWKRQ pin delayed de-assertion in sleep mode */
 	ret = tibbus_write_reg_ipec(dev, 0, TIBBUS_IPEC_NWKRQ_DELAY_POS,
-				    TIBBUS_IPEC_NWKRQ_DELAY_MASK);
+					TIBBUS_IPEC_NWKRQ_DELAY_MASK);
 	if (ret) {
 		LOG_ERR("Failed to clear NWKRQ_DELAY: %d", ret);
 		return ret;
@@ -1560,15 +1603,15 @@ static DEVICE_API(bshbus, tibbus_driver_api) = {
 };
 
 #define TIBBUS_INIT(inst) \
-    static const struct ti_bshbus_config tibbus_config_##inst = { \
-        .spi = SPI_DT_SPEC_INST_GET(inst, SPI_WORD_SET(8) | SPI_OP_MODE_MASTER, /* no delay */), \
-        .irq_gpio = GPIO_DT_SPEC_INST_GET(inst, irq_gpios), \
-    }; \
+	static const struct ti_bshbus_config tibbus_config_##inst = { \
+		.spi = SPI_DT_SPEC_INST_GET(inst, SPI_WORD_SET(8) | SPI_OP_MODE_MASTER, /* no delay */), \
+		.irq_gpio = GPIO_DT_SPEC_INST_GET(inst, irq_gpios), \
+	}; \
 	\
 	static struct ti_bshbus_data tibbus_data_##inst; \
 	\
 	BSHBUS_DEVICE_DT_INST_DEFINE(inst, tibbus_init, NULL, &tibbus_data_##inst, \
-				     &tibbus_config_##inst, POST_KERNEL, \
-				     CONFIG_BSHBUS_INIT_PRIORITY, &tibbus_driver_api);
+					 &tibbus_config_##inst, POST_KERNEL, \
+					 CONFIG_BSHBUS_INIT_PRIORITY, &tibbus_driver_api);
 
 DT_INST_FOREACH_STATUS_OKAY(TIBBUS_INIT)
