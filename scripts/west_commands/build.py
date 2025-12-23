@@ -119,6 +119,9 @@ class Build(Forceable):
         group = parser.add_argument_group('cmake and build tool')
         group.add_argument('-c', '--cmake', action='store_true',
                            help='force a cmake run')
+        group.add_argument('--cmake-opt', action='append',
+                           help='''same as using '-- cmake_opt', but avoid
+                           using -- (e.g. helpful in alias commands)''')
         group.add_argument('--cmake-only', action='store_true',
                            help="just run cmake; don't build (implies -c)")
         group.add_argument('--domain', action='append',
@@ -262,7 +265,7 @@ class Build(Forceable):
             else:
                 self.die("test item path does not exist")
 
-        self._run_cmake(board, origin, self.args.cmake_opts)
+        self._run_cmake(board, origin)
         if args.cmake_only:
             return
 
@@ -624,7 +627,7 @@ class Build(Forceable):
                 self.source_dir = self._find_source_dir()
                 self._sanity_check_source_dir()
 
-    def _run_cmake(self, board, origin, cmake_opts):
+    def _run_cmake(self, board, origin):
         if board is None and config_getboolean('board_warn', True):
             self.wrn('This looks like a fresh build and BOARD is unknown;',
                     "so it probably won't work. To fix, use",
@@ -643,6 +646,8 @@ class Build(Forceable):
             cmake_opts = [f'-DBOARD={board}']
         else:
             cmake_opts = []
+        if self.args.cmake_opt:
+            cmake_opts.extend(self.args.cmake_opt)
         if self.args.cmake_opts:
             cmake_opts.extend(self.args.cmake_opts)
         if self.args.snippets:
