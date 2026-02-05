@@ -1,0 +1,5 @@
+# Copyright 2024 NXP
+# SPDX-License-Identifier: Apache-2.0
+
+config BOARD_FCMB63X_EGM
+	select SOC_PART_NUMBER_RW610ETA2I

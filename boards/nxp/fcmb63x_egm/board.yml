@@ -1,0 +1,8 @@
+board:
+  name: fcmb63x_egm
+  full_name: FCMB63X_EGM
+  vendor: quectel
+  socs:
+    - name: rw612
+      variants:
+        - name: ns

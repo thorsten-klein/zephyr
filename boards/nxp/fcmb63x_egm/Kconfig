@@ -1,0 +1,6 @@
+# Copyright 2025 NXP
+# SPDX-License-Identifier: Apache-2.0
+
+config BOARD_FCMB63X_EGM
+	bool "Enable FCMB63X_EGM board support"
+	select BOARD_EARLY_INIT_HOOK
