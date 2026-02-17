@@ -3,7 +3,7 @@
 
 board_runner_args(jlink "--device=FCMB63X" "--reset-after-load")
 
-board_runner_args(linkserver  "--device=RW612:FRDM-RW612")
+board_runner_args(linkserver  "--device=RW610:FCBM63X")
 
 include(${ZEPHYR_BASE}/boards/common/jlink.board.cmake)
 include(${ZEPHYR_BASE}/boards/common/linkserver.board.cmake)

@@ -3,15 +3,15 @@
 Overview
 ********
 
-The RW612 is a highly integrated, low-power tri-radio wireless MCU with an
+The RW610 is a highly integrated, low-power tri-radio wireless MCU with an
 integrated 260 MHz ARM Cortex-M33 MCU and Wi-Fi 6 + Bluetooth Low Energy (LE) 5.3 / 802.15.4
 radios designed for a broad array of applications, including connected smart home devices,
 gaming controllers, enterprise and industrial automation, smart accessories and smart energy.
 
-The RW612 MCU subsystem includes 1.2 MB of on-chip SRAM and a high-bandwidth Quad SPI interface
+The RW610 MCU subsystem includes 1.2 MB of on-chip SRAM and a high-bandwidth Quad SPI interface
 with an on-the-fly decryption engine for securely accessing off-chip XIP flash.
 
-The advanced design of the RW612 delivers tight integration, low power and highly secure
+The advanced design of the RW610 delivers tight integration, low power and highly secure
 operation in a space- and cost-efficient wireless MCU requiring only a single 3.3 V power supply.
 
 Hardware

@@ -14,11 +14,7 @@ toolchain:
 ram: 960
 flash: 65536
 supported:
-  - arduino_gpio
   - gpio
-  - arduino_gpio
-  - arduino_i2c
-  - arduino_spi
   - dma
   - spi
   - i2c
@@ -31,6 +27,5 @@ supported:
   - hwinfo
   - adc
   - dac
-  - netif:eth
-  - netif:openthread
+  - netif:dbuscan
 vendor: nxp
