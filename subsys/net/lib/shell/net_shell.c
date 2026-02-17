@@ -223,7 +223,7 @@ const char *iface2str(struct net_if *iface, const char **extra)
 #endif
 
 #ifdef CONFIG_NET_L2_BSHBUS_RAW
-	if (net_if_l2(iface) == &NET_L2_GET_NAME(BSHBUS_DBUS2)) {
+	if (net_if_l2(iface) == &NET_L2_GET_NAME(BSHBUS_RAW)) {
 		if (extra) {
 			*extra = "==========";
 		}
