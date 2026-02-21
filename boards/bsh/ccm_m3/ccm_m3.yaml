@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-identifier: fcmb63x_egm
-name: Quectel FCMB63X_EGM
+identifier: ccm_m3
+name: BSH CCM M3
 type: mcu
 arch: arm
 toolchain:

@@ -4,10 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "fcmb63x_egm-pinctrl.dtsi"
+#include "ccm_m3-pinctrl.dtsi"
 
 / {
-	model = "nxp,fcmb63x_egm";
+	model = "bsh,ccm_m3";
 
 	aliases {
 		watchdog0 = &wwdt;

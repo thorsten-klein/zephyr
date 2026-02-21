@@ -7,4 +7,4 @@
 /dts-v1/;
 
 #include <nxp/nxp_rw6xx.dtsi>
-#include "fcmb63x_egm_common.dtsi"
+#include "ccm_m3_common.dtsi"

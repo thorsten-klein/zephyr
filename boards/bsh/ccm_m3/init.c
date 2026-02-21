@@ -7,7 +7,7 @@
 #include <fsl_power.h>
 #include <fsl_common.h>
 
-static void frdm_rw612_power_init_config(void)
+static void ccm_m3_power_init_config(void)
 {
 	power_init_config_t initCfg = {
 		/* VCORE AVDD18 supplied from iBuck on FRDM board. */
@@ -20,11 +20,11 @@ static void frdm_rw612_power_init_config(void)
 }
 
 #if CONFIG_PM
-static void frdm_rw612_pm_state_exit(enum pm_state state)
+static void ccm_m3_pm_state_exit(enum pm_state state)
 {
 	switch (state) {
 	case PM_STATE_STANDBY:
-		frdm_rw612_power_init_config();
+		ccm_m3_power_init_config();
 		break;
 	default:
 		break;
@@ -34,7 +34,7 @@ static void frdm_rw612_pm_state_exit(enum pm_state state)
 
 void board_early_init_hook(void)
 {
-	frdm_rw612_power_init_config();
+	ccm_m3_power_init_config();
 
 	/* If this is a wakeup from PM3 then return after configuring
 	 * the power supplies.
@@ -44,11 +44,11 @@ void board_early_init_hook(void)
 	}
 
 #if CONFIG_PM
-	static struct pm_notifier frdm_rw612_pm_notifier = {
-		.state_exit = frdm_rw612_pm_state_exit,
+	static struct pm_notifier ccm_m3_pm_notifier = {
+		.state_exit = ccm_m3_pm_state_exit,
 	};
 
-	pm_notifier_register(&frdm_rw612_pm_notifier);
+	pm_notifier_register(&ccm_m3_pm_notifier);
 #endif
 
 #ifdef CONFIG_I2S_TEST_SEPARATE_DEVICES

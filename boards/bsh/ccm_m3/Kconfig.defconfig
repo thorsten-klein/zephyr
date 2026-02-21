@@ -1,9 +1,9 @@
-# FRDM_RW612 board
+# CCM_M3 board
 
 # Copyright 2024-25 NXP
 # SPDX-License-Identifier: Apache-2.0
 
-if BOARD_FCMB63X_EGM
+if BOARD_CCM_M3
 
 config NET_L2_ETHERNET
 	default y if DT_HAS_NXP_ENET_MAC_ENABLED && NETWORKING
@@ -35,4 +35,4 @@ configdefault FLASH_BASE_ADDRESS
 
 endif
 
-endif # BOARD_FCMB63X_EGM
+endif # BOARD_CCM_M3
