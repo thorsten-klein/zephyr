@@ -1,0 +1,6 @@
+board:
+  name: ccm_m3
+  full_name: Central Computing Module M3
+  vendor: bsh
+  socs:
+    - name: rw610

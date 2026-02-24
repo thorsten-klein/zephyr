@@ -1350,6 +1350,50 @@ static int flash_flexspi_nor_check_jedec(struct flash_flexspi_nor_data *data,
 		return flash_flexspi_nor_quad_enable(data, flexspi_lut,
 						JESD216_DW15_QER_VAL_S2B1v6);
 
+    case 0x194020:
+
+		/* XM25QH256D flash, use 4-byte opcodes & addresses ----------------------- */
+
+		/* Fast Read Quad I/O with 4-byte address (ECh), 1S-4S-4S */
+		flexspi_lut[READ][0] = FLEXSPI_LUT_SEQ(
+				kFLEXSPI_Command_SDR,  kFLEXSPI_1PAD,  0xEC,           /* ECh */
+				kFLEXSPI_Command_RADDR_SDR, kFLEXSPI_4PAD, 32);
+		flexspi_lut[READ][1] = FLEXSPI_LUT_SEQ(
+				kFLEXSPI_Command_DUMMY_SDR, kFLEXSPI_4PAD, 6,
+				kFLEXSPI_Command_READ_SDR,  kFLEXSPI_4PAD, 0x04);
+
+		/* Page Program (1S-1S-4S) — using Quad Input Page Program (32h) + 4-byte address **/
+		flexspi_lut[PAGE_PROGRAM][0] = FLEXSPI_LUT_SEQ(
+				kFLEXSPI_Command_SDR,     kFLEXSPI_1PAD, 0x32,
+				kFLEXSPI_Command_RADDR_SDR, kFLEXSPI_1PAD, 32);
+		flexspi_lut[PAGE_PROGRAM][1] = FLEXSPI_LUT_SEQ(
+				kFLEXSPI_Command_WRITE_SDR, kFLEXSPI_4PAD, 0x04,
+				kFLEXSPI_Command_STOP,      kFLEXSPI_1PAD, 0x0);
+
+		/* Erase commands in 4-byte mode ----------------------------------------- */
+		flexspi_lut[ERASE_SECTOR][0] = FLEXSPI_LUT_SEQ(
+				kFLEXSPI_Command_SDR,   kFLEXSPI_1PAD, 0x21,           /* Sector Erase 4B */
+				kFLEXSPI_Command_RADDR_SDR, kFLEXSPI_1PAD, 32);
+
+		flexspi_lut[ERASE_BLOCK][0] = FLEXSPI_LUT_SEQ(
+				kFLEXSPI_Command_SDR,   kFLEXSPI_1PAD, 0xDC,           /* 64KB Block Erase 4B */
+				kFLEXSPI_Command_RADDR_SDR, kFLEXSPI_1PAD, 32);
+
+		/*  block erase (5Ch)  ----------------------------------------- */
+		flexspi_lut[ERASE_BLOCK][0] = FLEXSPI_LUT_SEQ(
+				kFLEXSPI_Command_SDR,   kFLEXSPI_1PAD, 0x5C,
+				kFLEXSPI_Command_RADDR_SDR, kFLEXSPI_1PAD, 32);
+
+		/* Read status for polling with opcode 0x05 -------------------------------- */
+		data->legacy_poll = true;
+		flexspi_lut[READ_STATUS_REG][0] = FLEXSPI_LUT_SEQ(
+				kFLEXSPI_Command_SDR, kFLEXSPI_1PAD, 0x05,             /* RDSR */
+				kFLEXSPI_Command_READ_SDR, kFLEXSPI_1PAD, 0x01);
+
+		/* Before entering Quad mode, ensure QE enable sequence is executed (SR2.QE = 1) */
+		return flash_flexspi_nor_quad_enable(data, flexspi_lut,
+											JESD216_DW15_QER_VAL_S2B1v5);
+
 	default:
 		return -ENOTSUP;
 	}

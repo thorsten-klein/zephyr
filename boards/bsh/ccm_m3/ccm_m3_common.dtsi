@@ -1,0 +1,221 @@
+/*
+ * Copyright 2024-2025 NXP
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include "ccm_m3-pinctrl.dtsi"
+
+/ {
+	model = "bsh,ccm_m3";
+
+	aliases {
+		watchdog0 = &wwdt;
+		usart-0 = &flexcomm3;
+		i2c-0 = &flexcomm2;
+		pwm-0 = &sctimer;
+	};
+
+	chosen {
+		zephyr,sram = &sram_data;
+		zephyr,flash = &w25q512jvfiq;
+		zephyr,console = &flexcomm3;
+		zephyr,shell-uart = &flexcomm3;
+		zephyr,flash-controller = &w25q512jvfiq;
+		zephyr,code-partition = &slot0_partition;
+		zephyr,uart-mcumgr = &flexcomm3;
+		zephyr,bshbus = &tidbus_rw610;
+	};
+};
+
+&flexcomm3 {
+	compatible = "nxp,lpc-usart";
+	status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&pinmux_flexcomm3_usart>;
+	pinctrl-names = "default";
+	wakeup-source;
+};
+
+&hsgpio0 {
+	status = "okay";
+	pinctrl-0 = <&pinmux_hsgpio0>;
+	pinctrl-names = "default";
+};
+
+&hsgpio1 {
+	status = "okay";
+	pinctrl-0 = <&pinmux_hsgpio1>;
+	pinctrl-names = "default";
+};
+
+&flexspi {
+	status = "okay";
+	ahb-bufferable;
+	ahb-prefetch;
+	ahb-cacheable;
+	ahb-read-addr-opt;
+	ahb-boundary = "1024";
+	rx-clock-source = <1>;
+	rx-clock-source-b = <1>;
+
+	/* Winbond external flash */
+	w25q512jvfiq: w25q512jvfiq@0 {
+		compatible = "nxp,imx-flexspi-nor";
+		reg = <0>;
+		size = <DT_SIZE_M(32 * 8)>;
+		status = "okay";
+		jedec-id = [20 40 19];
+		erase-block-size = <4096>;
+		write-block-size = <1>;
+		spi-max-frequency = <DT_FREQ_M(104)>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			/*
+			 * Partition sizes must be aligned
+			 * to the flash security sub-region size of 128KB.
+			 */
+			boot_partition: partition@0 {
+				label = "mcuboot";
+				reg = <0x00000000 DT_SIZE_K(128)>;
+			};
+
+			slot0_partition: partition@20000 {
+				label = "image-0";
+				reg = <0x00020000 DT_SIZE_K(640)>;
+			};
+
+			slot0_ns_partition: partition@C0000 {
+				label = "image-0-non-secure";
+				reg = <0x000C0000 DT_SIZE_M(3)>;
+			};
+
+			slot1_partition: partition@3C0000 {
+				label = "image-1";
+				reg = <0x003C0000 DT_SIZE_K(640)>;
+			};
+
+			slot1_ns_partition: partition@460000 {
+				label = "image-1-non-secure";
+				reg = <0x00460000 DT_SIZE_M(3)>;
+			};
+
+			storage_partition: partition@760000 {
+				label = "storage";
+				reg = <0x00760000 (DT_SIZE_M(57) - DT_SIZE_K(384))>; 
+			};
+		};
+	};
+
+	aps6404l: aps6404l@2 {
+		compatible = "nxp,imx-flexspi-aps6404l";
+		/* APS6404L is 8MB, 64MBit pSRAM */
+		size = <DT_SIZE_M(8 * 8)>;
+		reg = <2>;
+		spi-max-frequency = <DT_FREQ_M(109)>;
+		/* PSRAM cannot be enabled while board is in default XIP
+		 * configuration, as it will conflict with flash chip.
+		 */
+		status = "disabled";
+		cs-interval-unit = <1>;
+		cs-interval = <2>;
+		cs-hold-time = <3>;
+		cs-setup-time = <3>;
+		data-valid-time = <6>;
+		column-space = <0>;
+		ahb-write-wait-unit = <2>;
+		ahb-write-wait-interval = <0>;
+	};
+};
+
+&hci {
+	status = "okay";
+	wakeup-source;
+};
+
+&wwdt {
+	status = "okay";
+};
+
+&dma0 {
+	status = "okay";
+};
+
+&mrt0_channel0 {
+	status = "okay";
+};
+
+&ctimer0 {
+	status = "okay";
+};
+
+&pmu {
+	reset-causes-en = <PMU_RESET_CM33_LOCKUP>,
+			  <PMU_RESET_ITRC>,
+			  <PMU_RESET_AP_RESET>;
+};
+
+/* OS Timer is the wakeup source for PM mode 2 */
+&os_timer {
+	status = "okay";
+	wakeup-source;
+	deep-sleep-counter = <&rtc_highres>;
+};
+
+&systick {
+	status = "disabled";
+};
+
+&adc0 {
+	status = "okay";
+};
+
+&dac0 {
+	status = "okay";
+};
+
+/* RTC is the wakeup source for PM modes 3,4 */
+&rtc_highres {
+	status = "okay";
+	wakeup-source;
+};
+
+&nbu {
+	status = "okay";
+	wakeup-source;
+};
+
+&imu {
+	status = "okay";
+	wakeup-source;
+};
+
+zephyr_udc0: &usb_otg {
+	status = "okay";
+};
+
+/*
+ * DBusCan chip on flexcomm1
+ */
+&flexcomm1 {
+	compatible = "nxp,lpc-spi";
+	pinctrl-0 = <&pinmux_flexcomm1_spi>;
+	pinctrl-names = "default";
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	cs-gpios = <&hsgpio0 6 GPIO_ACTIVE_LOW>;
+
+	tidbus_rw610: bshbus@0 {
+		compatible = "ti,bshbus";
+		reg = <0>;
+		spi-max-frequency = <20000000>;
+		/* TODO: needs to be mapped to GPIO_01 in next sample (IO_MUX_GPIO25) */
+		irq-gpios = <&hsgpio1 18 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		status = "okay";
+	};
+};

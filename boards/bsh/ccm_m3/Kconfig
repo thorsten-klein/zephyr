@@ -1,0 +1,6 @@
+# Copyright 2025 NXP
+# SPDX-License-Identifier: Apache-2.0
+
+config BOARD_CCM_M3
+	bool "Enable CCM_M3 board support"
+	select BOARD_EARLY_INIT_HOOK

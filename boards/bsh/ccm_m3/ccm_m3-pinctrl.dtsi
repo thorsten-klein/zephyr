@@ -1,0 +1,47 @@
+/*
+ * Copyright 2022-2025 NXP
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <nxp/rw/RW610-pinctrl.h>
+
+&pinctrl {
+	pinmux_flexcomm3_usart: pinmux_flexcomm3_usart {
+		group0 {
+			pinmux = <IO_MUX_FC3_USART_DATA>;
+			slew-rate = "normal";
+		};
+	};
+
+	/* DBusCan Chip SPI pins */
+	pinmux_flexcomm1_spi: pinmux_flexcomm1_spi {
+		group0 {
+			pinmux = <IO_MUX_FC1_SPI_SS0>;
+			slew-rate = "ultra";
+		};
+		group1 {
+			pinmux = <IO_MUX_FC1_SPI_SS1>;
+			slew-rate = "ultra";
+		};
+	};
+
+	pinmux_hsgpio0: pinmux_hsgpio0 {
+		group0 {
+			pinmux = <
+				  IO_MUX_GPIO6     /* CS for BSHBus SPI */
+				  /* IO_MUX_GPIO25 TODO: GPIO_01/DBus Int */
+				>;
+			slew-rate = "normal";
+		};
+	};
+
+	pinmux_hsgpio1: pinmux_hsgpio1 {
+		group0 {
+			pinmux = <
+				  IO_MUX_GPIO50    /*  TODO: Current DBusCan Interrupt GPIO_05 */
+					>;
+			slew-rate = "normal";
+		};
+	};
+};
