@@ -1,0 +1,303 @@
+/***********************************************************************
+*                    SEGGER Microcontroller GmbH                       *
+*                        The Embedded Experts                          *
+************************************************************************
+*                                                                      *
+*                  (c) SEGGER Microcontroller GmbH                     *
+*                        All rights reserved                           *
+*                          www.segger.com                              *
+*                                                                      *
+************************************************************************
+*                                                                      *
+************************************************************************
+*                                                                      *
+*                                                                      *
+*  Licensing terms                                                     *
+*                                                                      *
+* This software may be distributed to your customers free of charge.   *
+* This grant of redistribution does not entitle YOU or enduser to      *
+* receive from SEGGER hard-copy documentation, technical support,      *
+* phone assistance, or enhancements or updates to the Software unless  *
+* a specific agreement clearly states otherwise.                       *
+*                                                                      *
+*                                                                      *
+* THIS SOFTWARE IS PROVIDED BY COPYRIGHT HOLDER "AS IS" AND ANY        *
+* EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE    *
+* IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR   *
+* PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL COPYRIGHT HOLDER BE        *
+* LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,     *
+* OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,             *
+* PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR   *
+* PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY  *
+* OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT         *
+* (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE    *
+* USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH     *
+* DAMAGE.                                                              *
+*                                                                      *
+************************************************************************
+
+-------------------------- END-OF-HEADER -----------------------------
+
+Purpose: Template showing basic device identification.
+Literature:
+  [1]  J-Link User Guide
+*/
+
+/*********************************************************************
+*
+*       Constants, fixed
+*
+**********************************************************************
+*/
+//
+// Bits & Shifts (ARM)
+//
+__constant U32 _DP_CTRL_STAT_BIT_DBGPWRUPREQ     = (1 << 30);
+__constant U32 _DP_CTRL_STAT_BIT_SYSPWRUPREQ     = (1 << 28);
+__constant U32 _DP_CTRL_STAT_BIT_STICKYERR       = (1 <<  5);
+
+/*********************************************************************
+*
+*       Static code
+*
+**********************************************************************
+*/
+
+/*********************************************************************
+*
+*       _IdentifyTarget
+*
+*  Function descripton
+*    If JTAG: Identifies target in JTAG chain.
+*    If SWD:  Execute JTAG->SWD switching sequence.
+*/
+static int _IdentifyTarget(void) {
+  U32 ActTIF;
+  U32 TAPId;
+  U32 TAPIdMask;
+  U32 IRLen;
+  U32 IRPrint;
+  U32 IRPrintMask;
+  int r;
+
+  JLINK_SYS_Report("-- Identifying target device...");
+  ActTIF = JLINK_ActiveTIF;
+  if ((ActTIF == JLINK_TIF_JTAG) || (ActTIF == JLINK_TIF_CJTAG)) {
+    JLINK_SYS_Report("-- JTAG selected. Identifying JTAG Chain...");
+    r = JLINK_JTAG_Identify();
+    if (r < 0) {
+      JLINK_SYS_Report("Error: Scanning JTAG chain failed.");
+      return -1;
+    }
+    JLINK_SYS_Report("-- JTAG Chain Identified. Connecting to DAP TAP...");
+    //
+    // The TAP IDCODE is described by ARM as follows:
+    //   [31:28] Version.
+    //   [27:12] Part number (always 0xBxxx).
+    //   [11:01] Manufacturer ID (always 0x23B).
+    //   [1]     Reserved (always b'1).
+    // Therefore, we check the highest bits of Partnumber and bits 11:0 to verify if it is indeed a TAP.
+    //
+    TAPId        = 0x0B000477;  // These bits are expected to be set in any TAP IDCODE. However, some devices have been known to not apply to the ARM specifications.
+    TAPIdMask    = 0x0F000FFF;  // Only take the bits of TAPId into account.
+    IRLen        = 4;           // IR register length of device to locate. This is 4 for most devices.
+    IRPrint      = 0x01;        // Value read back from scan chain when writing to IR register. JTAG defines the lower 2 bits only to be b'01.
+    IRPrintMask  = 0x0F;        // 4-bits are taken into account
+    r = JLINK_JTAG_FindSelectTAP(TAPId, TAPIdMask, IRLen, IRPrint, IRPrintMask);  // Also considers manual JTAG TAP position pre-selection if user provided <IRPre>, <DRPre>, ...
+    if (r < 0) {
+      JLINK_SYS_Report("Error: Could not find DAP TAP to use.");
+      return -1;
+    }
+    JLINK_SYS_Report("-- Successfully connected to selected DAP TAP.");
+  } else {
+    JLINK_SYS_Report("-- SWD selected. Executing JTAG -> SWD switching sequence...");
+    r = JLINK_CORESIGHT_Configure(""); // Outputs JTAG -> SWD switching sequence and checks if DAPId can be read.
+    if (r < 0) {
+      JLINK_SYS_Report("Error: Could not initialize SWD protocol.");
+    }
+  }
+  return r;
+}
+
+/*********************************************************************
+*
+*       _InitDAP()
+*
+*  Function description
+*    Initializes DAP, so JLINK_CORESIGHT_ functions can be used.
+*/
+static int _InitDAP(void) {
+  U32 v;
+  int r;
+  int t;
+
+  JLINK_SYS_Report("-- Initializing DAP...");
+  //
+  // Clear sticky error flags and power up DAP
+  //
+  v  = _DP_CTRL_STAT_BIT_DBGPWRUPREQ | _DP_CTRL_STAT_BIT_SYSPWRUPREQ;
+  if (JLINK_ActiveTIF == JLINK_TIF_JTAG) {
+    v |= _DP_CTRL_STAT_BIT_STICKYERR;
+  } else {
+    JLINK_CORESIGHT_WriteDP(JLINK_CORESIGHT_DP_REG_ABORT, 0x1E);
+  }
+  JLINK_CORESIGHT_WriteDP(JLINK_CORESIGHT_DP_REG_CTRL_STAT, v);
+  //
+  // Wait for DAP power up to complete
+  //
+  r = -1;
+  t = JLINK_GetTime() + 500;
+  do {
+    r = JLINK_CORESIGHT_ReadDP(JLINK_CORESIGHT_DP_REG_CTRL_STAT);
+    if (r == -1) {                    // Any error occurred while reading from the DP? => We are done.
+      break;
+    }
+    v = r;
+    if (v & (0xF << 28)) {            // CSYSPWRUPACK and CDBGPWRUPACK set (both ports completely powered)? => We are done.
+      r = 0;
+      break;
+    }
+    if ((t - JLINK_GetTime()) <= 0) { // Timeout reached? => We are done.
+      break;
+    }
+  } while(1);
+  if (r < 0) {
+    return -1;
+  }
+  //
+  // Configure AP
+  //
+  v = (0 << 4) | (0 << 24);                                    // Select AP[0] (AHB-AP) bank 0
+  JLINK_CORESIGHT_WriteDP(JLINK_CORESIGHT_DP_REG_SELECT,  v);
+  v = (0 << 4) | (1 << 24) | (1 << 25) | (1 << 29) | (2 << 0); // NO Auto-increment, Private access, HMASTER = DEBUG, Access size: word
+  r = JLINK_CORESIGHT_WriteAP(JLINK_CORESIGHT_AP_REG_CTRL, v);
+  if (r < 0) {
+    return -1;
+  }
+  JLINK_SYS_Report("-- DAP initialized successfully.");
+  return 0;
+}
+
+/*********************************************************************
+*
+*       Global functions
+*
+**********************************************************************
+*/
+
+void _Connect(void) {
+  int v;
+
+  JLINK_CORESIGHT_WriteDP(2, 0x00000000);
+  v = JLINK_CORESIGHT_ReadAP(0);
+  JLINK_SYS_Report1("CSW: ", v);
+  if((v & 0x40) == 0)
+  {
+	JLINK_SYS_Report("-- Activate debugger --");
+    // Power-up and clear errors
+    JLINK_CORESIGHT_WriteDP(1, 0x50000F20);
+    // Select ISP-AP
+    JLINK_CORESIGHT_WriteDP(2, 0x030000f0);
+    v = JLINK_CORESIGHT_ReadAP(3);
+    JLINK_SYS_Report1("DAP-IDCODE:", v);
+
+    // Activate DebugMailbox
+    JLINK_CORESIGHT_WriteDP(2, 0x03000000);
+    JLINK_CORESIGHT_ReadDP(0);
+    JLINK_CORESIGHT_WriteAP(0, 0x21);
+    v = JLINK_CORESIGHT_ReadAP(0);
+    while (v != 0)
+    {
+	  v = JLINK_CORESIGHT_ReadAP(0);
+    }
+
+    // Enter Debug Session
+    JLINK_CORESIGHT_WriteDP(2, 0x03000000);
+    JLINK_CORESIGHT_WriteAP(1, 0x07);
+    v = JLINK_CORESIGHT_ReadAP(0);
+    while (v != 0)
+    {
+	  v = JLINK_CORESIGHT_ReadAP(0);
+    }
+
+    JLINK_CORESIGHT_WriteDP(2, 0x03000000);
+    v = JLINK_CORESIGHT_ReadAP(2) & 0xFFFF;
+    while (v != 0)
+    {
+	  v = JLINK_CORESIGHT_ReadAP(2);
+    }
+  }
+}
+
+/*********************************************************************
+*
+*       InitTarget()
+*
+*  Function description
+*    If present, called right before performing generic connect sequence.
+*    Usually used for targets which need a special connect sequence.
+*    E.g.: TI devices with ICEPick TAP on them where core TAP needs to be enabled via specific ICEPick sequences first
+*
+*  Return value
+*    >= 0:  O.K.
+*     < 0:  Error
+*
+*  Notes
+*    (1) Must not use high-level API functions like JLINK_MEM_ etc.
+*    (2) For target interface JTAG, this device has to setup the JTAG chain + JTAG TAP Ids.
+*/
+int InitTarget(void) {
+  int r;
+  U32 v;
+  //
+  // Do basic device identification.
+  //
+  r = _IdentifyTarget();
+  if (r < 0) {
+    return -1;
+  }
+  r = _InitDAP();
+  if (r < 0) {
+    return -1;
+  }
+  //
+  // Enter device specific handling here.
+  //
+  // ...
+  //
+  _Connect();
+  return 0;
+}
+
+void ResetTarget() {
+  int tmp;
+
+  JLINK_SYS_Report("-- JLINK ResetTarget --");
+  // Halt the core
+  JLINK_MEM_WriteU32(0xE000EDF0, 0xA05F0003);
+
+  // Clear VECTOR CATCH and set TRCENA
+  tmp = JLINK_MEM_ReadU32(0xE000EDFC) & ~1;
+  JLINK_MEM_WriteU32(0xE000EDFC, tmp | (1<<24));
+
+  // Breakoint at SYSTEM_STICK_CALIB access
+  JLINK_MEM_WriteU32(0xE0001020, 0x50002034);
+  JLINK_MEM_WriteU32(0xE0001028, 0x814);
+
+  // Reset using the SYSRESETREQ
+  JLINK_SYS_Report("Set CM33_SYSRESETREQ_EN");
+  JLINK_MEM_WriteU32(0x40031008, 0x1);
+  JLINK_MEM_WriteU32(0xE000ED0C, 0x5FA0004);
+  JLINK_SYS_Sleep(50);
+
+  _Connect();
+
+  // Halt the core in case it didn't stop at a breakpiont
+  JLINK_MEM_WriteU32(0xE000EDF0, 0xA05F0003);
+
+  // Clear the Breakpoints
+  JLINK_MEM_WriteU32(0xE0001028, 0x0);
+}
+
+
+/*************************** end of file ****************************/

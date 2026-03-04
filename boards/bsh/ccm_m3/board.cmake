@@ -1,7 +1,8 @@
 # Copyright 2022-2023 NXP
 # SPDX-License-Identifier: Apache-2.0
 
-board_runner_args(jlink "--device=FCMB63X" "--reset-after-load")
+board_runner_args(jlink "--device=FCMB63X" "--reset-after-load"
+                       "--jlink-devices-xml=${CMAKE_CURRENT_LIST_DIR}/support/JLinkDevices.xml")
 
 board_runner_args(linkserver  "--device=RW610:FCBM63X")
 

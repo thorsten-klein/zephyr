@@ -1,0 +1,35 @@
+<DataBase>
+  <!--      -->
+  <!-- QUECTEL  -->
+  <!--      -->
+  <!--           -->
+  <!-- iMXRT1180 -->
+  <!--           -->
+  <!--           -->
+  <!--    RW     -->
+  <!--           -->
+  <!-- <Device>
+    <ChipInfo Vendor="QUECTEL" Name="FCMA62N" WorkRAMAddr="0x00000000" WorkRAMSize="0x00130000" Core="JLINK_CORE_CORTEX_M33" JLinkScriptFile="Devices/QUECTEL/FCMA62N/FCMA62N.JLinkScript" Aliases="RW612"/>
+    <FlashBankInfo Name="QSPI flash" BaseAddr="0x08000000" MaxSize="0x08000000" Loader="Devices/QUECTEL/FCMA62N/FCMA62N_FLEXSPI.FLM" LoaderType="FLASH_ALGO_TYPE_OPEN"/>
+    <FlashBankInfo Name="Secure QSPI flash" BaseAddr="0x18000000" MaxSize="0x08000000" Loader="Devices/QUECTEL/FCMA62N/FCMA62N_FLEXSPI_S.FLM" LoaderType="FLASH_ALGO_TYPE_OPEN"/>
+  </Device>
+  <Device>
+    <ChipInfo Vendor="QUECTEL" Name="FCM363X" WorkRAMAddr="0x00000000" WorkRAMSize="0x00130000" Core="JLINK_CORE_CORTEX_M33" JLinkScriptFile="Devices/QUECTEL/FCM363X/FCM363X.JLinkScript" Aliases="RW612"/>
+    <FlashBankInfo Name="QSPI flash" BaseAddr="0x08000000" MaxSize="0x08000000" Loader="Devices/QUECTEL/FCM363X/FCM363X_FLEXSPI.FLM" LoaderType="FLASH_ALGO_TYPE_OPEN"/>
+    <FlashBankInfo Name="Secure QSPI flash" BaseAddr="0x18000000" MaxSize="0x08000000" Loader="Devices/QUECTEL/FCM363X/FCM363X_FLEXSPI_S.FLM" LoaderType="FLASH_ALGO_TYPE_OPEN"/>
+  </Device> -->
+  <Device>
+    <ChipInfo Vendor="NXP" Name="FCMB63X" WorkRAMAddr="0x00000000" WorkRAMSize="0x00130000" Core="JLINK_CORE_CORTEX_M33" JLinkScriptFile="Devices/QUECTEL/FCMB63X/FCMB63X.JLinkScript" Aliases="RW6xx"/>
+    <FlashBankInfo Name="QSPI flash" BaseAddr="0x08000000" MaxSize="0x08000000" Loader="Devices/QUECTEL/FCMB63X/FCMB63X_FLEXSPI.FLM" LoaderType="FLASH_ALGO_TYPE_OPEN"/>
+    <FlashBankInfo Name="Secure QSPI flash" BaseAddr="0x18000000" MaxSize="0x08000000" Loader="Devices/QUECTEL/FCMB63X/FCMB63X_FLEXSPI_S.FLM" LoaderType="FLASH_ALGO_TYPE_OPEN"/>
+  </Device>
+  <!--         -->
+  <!--  iMX8   -->
+  <!--         -->
+  <!--         -->
+  <!--  iMX9   -->
+  <!--         -->
+  <!--         -->
+  <!--   PN    -->
+  <!--         -->
+</DataBase>
