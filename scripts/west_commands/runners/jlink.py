@@ -56,7 +56,8 @@ class JLinkBinaryRunner(ZephyrBinaryRunner):
                  gdb_port=DEFAULT_JLINK_GDB_PORT,
                  rtt_port=DEFAULT_JLINK_RTT_PORT,
                  tui=False, tool_opt=None, dev_id_type=None, batch=False,
-                 pre_script_cmds=None):
+                 pre_script_cmds=None,
+                 pre_scripts=None):
         super().__init__(cfg)
         self.file = cfg.file
         self.file_type = cfg.file_type
@@ -85,6 +86,7 @@ class JLinkBinaryRunner(ZephyrBinaryRunner):
         self.dev_id_type = dev_id_type
         self.is_batch = batch
         self.pre_script_cmds = pre_script_cmds
+        self.pre_scripts = pre_scripts
 
         self.tool_opt = []
         if tool_opt is not None:
@@ -208,6 +210,9 @@ class JLinkBinaryRunner(ZephyrBinaryRunner):
         parser.add_argument('--pre-script-cmd', action='append', dest='pre_script_cmds',
                             help='Custom JLink command to prepend to the runner.jlink. Can be '
                             'given multiple times.')
+        parser.add_argument('--pre-script', action='append', type=Path, dest='pre_scripts',
+                            help='Custom JLink scripts with commands that are prepended to runner.jlink. '
+                            'Can be given multiple times.')
 
         parser.set_defaults(reset=False)
 
@@ -231,7 +236,8 @@ class JLinkBinaryRunner(ZephyrBinaryRunner):
                                  tui=args.tui, tool_opt=args.tool_opt,
                                  dev_id_type=args.dev_id_type,
                                  batch=args.batch,
-                                 pre_script_cmds=args.pre_script_cmds)
+                                 pre_script_cmds=args.pre_script_cmds,
+                                 pre_scripts=args.pre_scripts)
 
     def print_gdbserver_message(self):
         if not self.thread_info_enabled:
@@ -440,7 +446,13 @@ class JLinkBinaryRunner(ZephyrBinaryRunner):
                 self.run_client(client_cmd)
 
     def get_default_flash_commands(self):
-        lines = self.pre_script_cmds or [] # Prepend custom script commands
+        lines = []
+
+        pre_scripts = self.pre_scripts or []
+        for pre_script in pre_scripts:
+            lines += Path(pre_script).read_text().splitlines()
+
+        lines += self.pre_script_cmds or [] # Prepend custom script commands
 
         lines += [
             'ExitOnError 1',  # Treat any command-error as fatal
