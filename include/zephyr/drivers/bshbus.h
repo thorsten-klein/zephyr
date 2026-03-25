@@ -96,6 +96,14 @@ struct bshbus_frame_dbus2_tx_ind {
 };
 
 /**
+ * @brief Frame for a BSH D-Bus-2 wakeup pulse transmit indication
+ */
+struct bshbus_frame_dbus2_wakeup_pulse_tx_ind {
+    /** Status of transmitted message. @see @ref BSHBUS_FRAME_STATUS. */
+    uint16_t status;
+};
+
+/**
  * @brief BSH Bus frame structure
  */
 struct bshbus_frame {
@@ -113,8 +121,10 @@ struct bshbus_frame {
 		struct bshbus_frame_dbus2_rx rx;
 		/** BSH D-Bus-2 message to transmit. */
 		struct bshbus_frame_dbus2_tx tx;
-        /** Transmit indication for a transmitted BSH D-Bus-2 message. */
-        struct bshbus_frame_dbus2_tx_ind tx_ind;
+		/** Transmit indication for a transmitted BSH D-Bus-2 message. */
+		struct bshbus_frame_dbus2_tx_ind tx_ind;
+		/** Transmit indication for a transmitted Wakeup pulse. */
+		struct bshbus_frame_dbus2_wakeup_pulse_tx_ind wakeup_pulse_tx_ind;
 	};
 };
 
@@ -126,6 +136,12 @@ struct bshbus_frame {
 
 /** Frame for D-Bus-2 transmit indication. @see @ref bshbus_frame_dbus2_tx_ind */
 #define BSHBUS_FRAME_DBUS2_TX_IND BIT(2)
+
+/** Frame for D-Bus-2 wakeup pulse transmit indication. @see @ref bshbus_frame_dbus2_wakeup_pulse_tx_ind */
+#define BSHBUS_FRAME_DBUS2_WAKEUP_PULSE_TX_IND BIT(3)
+
+/** Frame for D-Bus-2 wakeup pulse reception. */
+#define BSHBUS_FRAME_DBUS2_WAKEUP_PULSE_RX BIT(4)
 
 static inline void bshbus_frame_set_flag(struct bshbus_frame *frame,
 			uint32_t flag)
@@ -174,6 +190,12 @@ static inline struct bshbus_frame_dbus2_tx_ind
 	return &frame->tx_ind;
 };
 
+static inline struct bshbus_frame_dbus2_wakeup_pulse_tx_ind
+		*bshbus_frame_to_dbus2_wakeup_pulse_tx_ind(struct bshbus_frame *frame)
+{
+	return &frame->wakeup_pulse_tx_ind;
+};
+
 static inline void bshbus_prepare_frame_dbus2_tx_ind(struct bshbus_frame *frame,
 		   uint16_t unique_id, uint16_t status)
 {
@@ -181,6 +203,19 @@ static inline void bshbus_prepare_frame_dbus2_tx_ind(struct bshbus_frame *frame,
 
 	bshbus_frame_to_dbus2_tx_ind(frame)->unique_id = unique_id;
 	bshbus_frame_to_dbus2_tx_ind(frame)->status = status;
+};
+
+
+static inline void bshbus_prepare_frame_dbus2_wakeup_pulse_tx_ind(struct bshbus_frame *frame, uint16_t status)
+{
+	bshbus_frame_set_flag(frame, BSHBUS_FRAME_DBUS2_WAKEUP_PULSE_TX_IND);
+
+	bshbus_frame_to_dbus2_wakeup_pulse_tx_ind(frame)->status = status;
+};
+
+static inline void bshbus_prepare_frame_dbus2_wakeup_pulse_rx(struct bshbus_frame *frame)
+{
+	bshbus_frame_set_flag(frame, BSHBUS_FRAME_DBUS2_WAKEUP_PULSE_RX);
 };
 
 static inline struct bshbus_frame_dbus2_rx
@@ -277,6 +312,21 @@ typedef void (*bshbus_dbus2_rx_callback_t)(const struct device *dev,
 /** Frame status interbyte timeout */
 #define BSHBUS_FRAME_STATUS_INTREBYTE_TIMEOUT BIT(7)
 
+/** Frame status internal I/O error */
+#define BSHBUS_FRAME_STATUS_IO_ERROR BIT(8)
+
+/** @} */
+
+/**
+ * @name BSH Bus pending events status
+ * @anchor BSHBUS_PENDING_EVENTS_STATUS
+ *
+ * @{
+ */
+
+/** Pending status wakeup pulse transmission */
+#define BSHBUS_PENDING_EVENT_WUP_TX BIT(0)
+
 /** @} */
 
 /**
@@ -332,6 +382,9 @@ typedef int (*bshbus_dbus2_register_node_t)(const struct device *dev,
 typedef int (*bshbus_dbus2_unregister_node_t)(const struct device *dev,
 			  uint8_t node_address);
 
+typedef int (*bshbus_dbus2_send_wakeuppulse_t)(const struct device *dev,
+			  bshbus_dbus2_tx_callback_t cb, void *user_data);
+
 __subsystem struct bshbus_driver_api {
 	bshbus_start_t start;
 	bshbus_stop_t stop;
@@ -340,6 +393,7 @@ __subsystem struct bshbus_driver_api {
 	bshbus_dbus2_remove_receiver_t dbus2_remove_receiver;
 	bshbus_dbus2_register_node_t dbus2_register_node;
 	bshbus_dbus2_unregister_node_t dbus2_unregister_node;
+	bshbus_dbus2_send_wakeuppulse_t dbus2_send_wakeup_pulse;
 };
 
 /** @endcond */
@@ -411,6 +465,20 @@ static inline int z_impl_bshbus_dbus2_add_receiver(const struct device *dev,
 	else {
 		return 0;
 	}
+}
+
+__syscall int bshbus_dbus2_send_wakeuppulse(const struct device *dev,
+		bshbus_dbus2_tx_callback_t cb, void *user_data);
+
+static inline int z_impl_bshbus_dbus2_send_wakeuppulse(const struct device *dev,
+		bshbus_dbus2_tx_callback_t cb, void *user_data)
+{
+	const struct bshbus_driver_api *api = (const struct bshbus_driver_api *)dev->api;
+
+	if (api->dbus2_send_wakeup_pulse) {
+		return api->dbus2_send_wakeup_pulse(dev, cb, user_data);
+	}
+	return -ENOTSUP;
 }
 
 __syscall int bshbus_dbus2_register_node(const struct device *dev,

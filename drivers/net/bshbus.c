@@ -21,6 +21,8 @@ LOG_MODULE_REGISTER(net_bshbus, CONFIG_NET_BSHBUS_LOG_LEVEL);
 struct net_bshbus_context {
 	struct net_if *iface;
 	struct k_fifo pending_tx_pkts;
+	struct k_mutex wakeup_pulse_mutex;
+	uint16_t pending_events;
 };
 
 struct net_bshbus_config {
@@ -40,10 +42,12 @@ static void net_bshbus_dbus2_recv(const struct device *dev, struct bshbus_frame 
 
 	ARG_UNUSED(dev);
 
-	LOG_DBG("Received packet on interface %p", ctx->iface);
-	LOG_DBG("\tdest_addr: %02x", bshbus_frame_to_dbus2_rx(frame)->dest_addr);
-	LOG_DBG("\tmsg_id: %04x", bshbus_frame_to_dbus2_rx(frame)->msg_id);
-	LOG_DBG("\tdlen: %d", bshbus_frame_to_dbus2_rx(frame)->dlen);
+	if (bshbus_is_dbus2_rx_frame(frame)) {
+		LOG_DBG("Received packet on interface %p", ctx->iface);
+		LOG_DBG("\tdest_addr: %02x", bshbus_frame_to_dbus2_rx(frame)->dest_addr);
+		LOG_DBG("\tmsg_id: %04x", bshbus_frame_to_dbus2_rx(frame)->msg_id);
+		LOG_DBG("\tdlen: %d", bshbus_frame_to_dbus2_rx(frame)->dlen);
+	}
 
 	pkt = net_pkt_rx_alloc_with_buffer(ctx->iface, sizeof(*frame), AF_BSHBUS, 0,
 						K_NO_WAIT);
@@ -51,8 +55,6 @@ static void net_bshbus_dbus2_recv(const struct device *dev, struct bshbus_frame 
 		LOG_ERR("Failed to obtain net_pkt");
 		return;
 	}
-
-	bshbus_frame_set_flag(frame, BSHBUS_FRAME_DBUS2_RX);
 
 	if (net_pkt_write(pkt, frame, sizeof(*frame))) {
 		LOG_ERR("Failed to append RX data");
@@ -117,6 +119,42 @@ static void net_bshbus_dbus2_send_cb(const struct device *dev, uint16_t status,
 	}
 
 	net_pkt_unref(tx_pkt);
+}
+
+static void net_bshbus_dbus2_wup_tx_cb(const struct device *dev, uint16_t status,
+			void *user_data)
+{
+	struct net_bshbus_context *ctx = (struct net_bshbus_context *)user_data;
+	struct net_pkt *tx_wup_ind_pkt = NULL;
+	struct bshbus_frame tx_wup_ind_frame = {0};
+	int ret;
+
+	LOG_DBG("Wakeup pulse transmission finished: %d", status);
+	/* Clear the wakeup pulse pending status stored at 0th position */
+	k_mutex_lock(&ctx->wakeup_pulse_mutex, K_FOREVER);
+	ctx->pending_events &= ~BSHBUS_PENDING_EVENT_WUP_TX;
+	k_mutex_unlock(&ctx->wakeup_pulse_mutex);
+
+	tx_wup_ind_pkt = net_pkt_rx_alloc_with_buffer(ctx->iface, sizeof(tx_wup_ind_frame),
+						AF_BSHBUS, 0, K_NO_WAIT);
+	if (!tx_wup_ind_pkt) {
+		LOG_ERR("Allocate wakeup pulse TX IND packet failed");
+		return;
+	}
+
+	bshbus_prepare_frame_dbus2_wakeup_pulse_tx_ind(&tx_wup_ind_frame, status); 
+
+	if (net_pkt_write(tx_wup_ind_pkt, &tx_wup_ind_frame, sizeof(tx_wup_ind_frame))) {
+		LOG_ERR("Failed to append wakeup pulse TX_IND data");
+		net_pkt_unref(tx_wup_ind_pkt);
+		return;
+	}
+
+	ret = net_recv_data(ctx->iface, tx_wup_ind_pkt);
+	if (ret < 0) {
+		LOG_DBG("net_recv_data failed: %d", ret);
+		net_pkt_unref(tx_wup_ind_pkt);
+	}
 }
 
 static int net_bshbus_dbus2_send(const struct device *dev, struct net_pkt *pkt)
@@ -184,6 +222,7 @@ static void net_bshbus_iface_init(struct net_if *iface)
 
 	ctx->iface = iface;
 	k_fifo_init(&ctx->pending_tx_pkts);
+	k_mutex_init(&ctx->wakeup_pulse_mutex);
 
 	LOG_DBG("Init BSHBus interface for %s", dev->name);
 }
@@ -198,6 +237,26 @@ static int net_bshbus_init(const struct device *dev)
 	}
 
 	return 0;
+}
+
+static int net_bshbus_check_wakeup_pulse_tx_progress(const struct device *dev)
+{
+	const struct net_bshbus_config *cfg = dev->config;
+	struct net_bshbus_context *ctx = dev->data;
+	int ret;
+
+	k_mutex_lock(&ctx->wakeup_pulse_mutex, K_FOREVER);
+
+	if (ctx->pending_events & BSHBUS_PENDING_EVENT_WUP_TX) {
+		k_mutex_unlock(&ctx->wakeup_pulse_mutex);
+		return -EAGAIN;
+	}
+
+	ctx->pending_events |= BSHBUS_PENDING_EVENT_WUP_TX;
+	k_mutex_unlock(&ctx->wakeup_pulse_mutex);
+	ret = bshbus_dbus2_send_wakeuppulse(cfg->bshbus_dev, net_bshbus_dbus2_wup_tx_cb, ctx);
+	
+	return ret;
 }
 
 static int net_bshbus_setsockopt(const struct device *dev, void *obj, int level,
@@ -215,6 +274,9 @@ static int net_bshbus_setsockopt(const struct device *dev, void *obj, int level,
 			return bshbus_dbus2_add_receiver(cfg->bshbus_dev, net_bshbus_dbus2_recv, ctx);
 		case BSHBUS_DBUS2_NODE:
 			return bshbus_dbus2_register_node(cfg->bshbus_dev, *(const uint8_t *)optval);
+		case BSHBUS_DBUS2_WAKEUP_PULSE:
+			return net_bshbus_check_wakeup_pulse_tx_progress(dev);
+			break;
 		default:
 			LOG_ERR("Invalid option name %d", optname);
 			return -EINVAL;

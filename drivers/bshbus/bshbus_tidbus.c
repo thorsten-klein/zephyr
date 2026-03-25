@@ -48,6 +48,7 @@ LOG_MODULE_REGISTER(ti_bshbus, CONFIG_BSHBUS_LOG_LEVEL);
 #define TIBBUS_DBUS_IE_ADDR      0x4054u
 #define TIBBUS_DBUS_BSA_ADDR     0x4060u
 #define TIBBUS_DBUS_BCC_ADDR     0x406Cu
+#define TIBBUS_DBUS_DPA_ADDR	 0x4070u
 #define TIBBUS_DBUS_DPC_ADDR     0x4074u
 #define TIBBUS_DBUS_SIDFC_ADDR   0x4084u
 #define TIBBUS_DBUS_NF_ADDR      0x4200u
@@ -115,6 +116,9 @@ LOG_MODULE_REGISTER(ti_bshbus, CONFIG_BSHBUS_LOG_LEVEL);
 #define TIBBUS_DBUS_DPC_BVD_THLD_POS      25u
 #define TIBBUS_DBUS_DPC_BVD_TO_NWKRQ_MASK 0x04000000u
 #define TIBBUS_DBUS_DPC_BVD_TO_NWKRQ_POS  26u
+/* DBUS DPA */
+#define TIBBUS_DBUS_DPA_TX_WK_PULSE_MASK 0x00000001u
+#define TIBBUS_DBUS_DPA_TX_WK_PULSE_POS  0u 
 
 /* DBUS BCC */
 #define TIBBUS_DBUS_BCC_RXFIFO_CLR_MASK 0x00000004u
@@ -130,7 +134,7 @@ LOG_MODULE_REGISTER(ti_bshbus, CONFIG_BSHBUS_LOG_LEVEL);
 #define TIBBUS_IF_DBUS_CAN_MASK    0x00000002u
 
 /* IE (Interrupt Enable) */
-#define TIBBUS_DBUS_IE_ALL_BIT_MASK     0x0007FFFFu
+#define TIBBUS_DBUS_IE_ALL_BIT_MASK     0x4007FFFFu
 #define TIBBUS_DBUS_IE_DBUSSLNT_EN_MASK 0x00000100u
 
 /* DBUS IR (Interrupt Flags) */
@@ -138,6 +142,7 @@ LOG_MODULE_REGISTER(ti_bshbus, CONFIG_BSHBUS_LOG_LEVEL);
 #define TIBBUS_DBUS_IR_RF0F_MASK 0x00000004u /* RX FIFO full */
 #define TIBBUS_DBUS_IR_RF0L_MASK 0x00000008u /* RX FIFO message lost */
 #define TIBBUS_DBUS_IR_TEFN_MASK 0x00001000u /* TX Status FIFO new entry */
+#define TIBBUS_DBUS_IR_WUP_MASK  0x40000000u /* Wakeup pulse detected */
 
 /* DBUS RXF0S (RX FIFO Status) */
 #define TIBBUS_DBUS_RXF0S_ADDR       0x40A4u
@@ -273,13 +278,22 @@ struct ti_bshbus_rx {
 	bshbus_dbus2_rx_callback_t cb;
 };
 
+struct ti_bshbus_wup_tx {
+	struct k_timer wakeup_check_timer;
+	void *user_data;
+	bshbus_dbus2_tx_callback_t cb;
+	uint8_t wakeup_retry_count;
+};
+
 struct ti_bshbus_data {
 	struct k_thread int_thread;
 	struct k_sem int_sem;
 	struct ti_bshbus_tx tx;
 	struct ti_bshbus_rx rx;
+	struct ti_bshbus_wup_tx wup_tx;
 	struct gpio_callback int_gpio_cb;
 	const struct device *dev;
+	uint16_t pending_events;
 
 	K_KERNEL_STACK_MEMBER(int_stack, CONFIG_BSHBUS_TIDBUS_THREAD_STACK_SIZE);
 };
@@ -1233,6 +1247,56 @@ int tibbus_unregister_node(const struct device *dev, uint8_t node_address)
 	return 0;
 }
 
+static int tibbus_check_wakeup_pulse(const struct ti_bshbus_data *data)
+{
+	int ret;
+	uint32_t dpa_flags;
+
+	ret = tibbus_read_reg(data->dev, TIBBUS_DBUS_DPA_ADDR, &dpa_flags);
+	if (ret) {
+		LOG_ERR("Failed to read register: %d", ret);
+		return -EAGAIN;
+	}
+
+	if (!(dpa_flags & TIBBUS_DBUS_DPA_TX_WK_PULSE_MASK)) {
+		if (data->wup_tx.cb) {
+			data->wup_tx.cb(data->dev, BSHBUS_FRAME_STATUS_VALID, data->wup_tx.user_data);
+		}
+		return 0;
+	}
+
+	return -EAGAIN;
+}
+
+static void tibbus_wakeup_pulse_timer_handler(struct k_timer *timer)
+{
+	struct ti_bshbus_wup_tx *wup_tx = CONTAINER_OF(timer, struct ti_bshbus_wup_tx, wakeup_check_timer);
+	struct ti_bshbus_data *data = CONTAINER_OF(wup_tx, struct ti_bshbus_data, wup_tx);
+
+	k_sem_give(&data->int_sem);
+}
+
+int tibbus_send_wakeup_pulse(const struct device *dev,
+					 bshbus_dbus2_tx_callback_t cb,
+					 void *user_data)
+{
+	int ret;
+	struct ti_bshbus_data *data = dev->data;
+
+	data->wup_tx.user_data = user_data;
+	data->wup_tx.cb = cb;
+	data->wup_tx.wakeup_retry_count = 0;
+	ret = tibbus_write_reg(dev, TIBBUS_DBUS_DPA_ADDR, TIBBUS_DBUS_DPA_TX_WK_PULSE_MASK);
+	if (ret) {
+		LOG_ERR("Failed to write DPA register: %d", ret);
+		return -EAGAIN;
+	}
+	data->pending_events |= BSHBUS_PENDING_EVENT_WUP_TX;
+	k_timer_start(&data->wup_tx.wakeup_check_timer, K_MSEC(15), K_NO_WAIT);
+
+	return 0;
+}
+
 static void tibbus_int_gpio_callback(const struct device *port,
 					 struct gpio_callback *cb,
 					 gpio_port_pins_t pins)
@@ -1348,6 +1412,21 @@ static int tibbus_read_rx_message(const struct device *dev)
 	return 0;
 }
 
+static int tibbus_process_rx_wakeup_pulse(const struct device *dev)
+{
+	struct ti_bshbus_data *data = dev->data;
+
+	if (data->rx.cb) {
+		struct bshbus_frame frame;
+
+		bshbus_prepare_frame_dbus2_wakeup_pulse_rx(&frame);
+
+		data->rx.cb(dev, &frame, data->rx.user_data);
+	}
+
+	return 0;
+}
+
 static int tibbus_read_tx_status(const struct device *dev)
 {
 	uint32_t txefs;
@@ -1447,6 +1526,10 @@ static int tibbus_handle_irq(const struct device *dev)
 		tibbus_read_tx_status(dev);
 	}
 
+	if (dbus_flags & TIBBUS_DBUS_IR_WUP_MASK) {
+		tibbus_process_rx_wakeup_pulse(dev);
+	}
+
 	if (dbus_flags & TIBBUS_DBUS_IR_RF0L_MASK) {
 		LOG_WRN("RX FIFO message lost");
 	}
@@ -1458,6 +1541,29 @@ static int tibbus_handle_irq(const struct device *dev)
 	return 0;
 }
 
+static void tibbus_handle_wakeup_pulse_timeout(struct ti_bshbus_data *tibbus_data)
+{
+	int ret;
+
+	ret = tibbus_check_wakeup_pulse(tibbus_data);
+	if (!ret) {
+		tibbus_data->wup_tx.wakeup_retry_count = 0;
+		tibbus_data->pending_events &= ~BSHBUS_PENDING_EVENT_WUP_TX;
+	}
+	else {
+		tibbus_data->wup_tx.wakeup_retry_count++;
+		if (tibbus_data->wup_tx.wakeup_retry_count <= 5) {
+			k_timer_start(&tibbus_data->wup_tx.wakeup_check_timer, K_MSEC(1), K_NO_WAIT);
+		} else {
+			tibbus_data->wup_tx.wakeup_retry_count = 0;
+			tibbus_data->pending_events &= ~BSHBUS_PENDING_EVENT_WUP_TX;
+			if (tibbus_data->wup_tx.cb) {
+				tibbus_data->wup_tx.cb(tibbus_data->dev, BSHBUS_FRAME_STATUS_IO_ERROR, tibbus_data->wup_tx.user_data);
+			}
+		}
+	}
+}
+
 static void tibbus_int_thread(void *p1, void *p2, void *p3)
 {
 	ARG_UNUSED(p2);
@@ -1466,11 +1572,15 @@ static void tibbus_int_thread(void *p1, void *p2, void *p3)
 	const struct device *dev = p1;
 	struct ti_bshbus_data *tibbus_data = dev->data;
 	const struct ti_bshbus_config *tibbus_config = dev->config;
-
 	LOG_DBG("Thread started...");
 
 	while (true) {
 		k_sem_take(&tibbus_data->int_sem, K_FOREVER);
+
+		if (tibbus_data->pending_events & BSHBUS_PENDING_EVENT_WUP_TX) {
+			/* Handle DBus Wakeup Tx Indication */
+			tibbus_handle_wakeup_pulse_timeout(tibbus_data);
+		}
 
 		/* Handle interrupt while pin is active (low) */
 		while (gpio_pin_get_dt(&tibbus_config->irq_gpio) == 1) {
@@ -1490,6 +1600,8 @@ static int tibbus_init(const struct device *dev)
 	LOG_DBG("Calling init...");
 
 	k_sem_init(&tibbus_data->int_sem, 0, 1);
+	k_timer_init(&tibbus_data->wup_tx.wakeup_check_timer, tibbus_wakeup_pulse_timer_handler, NULL);
+	tibbus_data->wup_tx.wakeup_retry_count = 0;
 
 	if (!spi_is_ready_dt(&tibbus_config->spi)) {
 		LOG_ERR("SPI bus not ready");
@@ -1600,6 +1712,7 @@ static DEVICE_API(bshbus, tibbus_driver_api) = {
 	.dbus2_remove_receiver = tibbus_remove_receiver,
 	.dbus2_register_node = tibbus_register_node,
 	.dbus2_unregister_node = tibbus_unregister_node,
+	.dbus2_send_wakeup_pulse = tibbus_send_wakeup_pulse,
 };
 
 #define TIBBUS_INIT(inst) \

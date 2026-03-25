@@ -213,6 +213,20 @@ static void zbshbus_received_cb(struct net_context *ctx, struct net_pkt *pkt,
 					break;
 				}
 				break;
+			case BSHBUS_FRAME_DBUS2_WAKEUP_PULSE_TX_IND:
+				if (receivers[i].ctx == net_pkt_context(pkt)) {
+					LOG_DBG("Receiver for D-Bus-2 WAKEUP PULSE TX IND found");
+					ctx = receivers[i].ctx;
+					break;
+				}
+				break;
+			case BSHBUS_FRAME_DBUS2_WAKEUP_PULSE_RX:
+				if (receivers[i].ctx == net_pkt_context(pkt)) {
+					LOG_DBG("Receiver for D-Bus-2 WAKEUP PULSE RX found");
+					ctx = receivers[i].ctx;
+					break;
+				}
+				break;
 			default:
 				LOG_ERR("Invalid frame format %d", bshbus_frame_get_flag(frame));
 				return;
@@ -717,6 +731,26 @@ static int bshbus2_register_node(struct net_context *ctx, int level, int optname
 	return 0;
 }
 
+static int bshbus2_wakeup_pulse(struct net_context *ctx, int level, int optname)
+{
+	const struct bshbus_api *api;
+	struct net_if *iface;
+	const struct device *dev;
+	int ret;
+
+	iface = net_context_get_iface(ctx);
+	dev = net_if_get_device(iface);
+	api = dev->api;
+
+	ret = api->setsockopt(dev, ctx, level, optname, NULL, 0);
+	if (ret) {
+		LOG_ERR("Sending Wakeup pulse failed: %d", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
 static int zbshbus_setsockopt_ctx(struct net_context *ctx, int level, int optname,
 				   const void *optval, socklen_t optlen)
 {
@@ -728,7 +762,7 @@ static int zbshbus_setsockopt_ctx(struct net_context *ctx, int level, int optnam
 		return sock_fd_op_vtable.setsockopt(ctx, level, optname, optval, optlen);
 	}
 
-	if (optval == NULL) {
+	if ((optval == NULL) && (optname != BSHBUS_DBUS2_WAKEUP_PULSE)) {
 		return -EINVAL;
 	}
 
@@ -747,6 +781,9 @@ static int zbshbus_setsockopt_ctx(struct net_context *ctx, int level, int optnam
 			break;
 		case BSHBUS_DBUS2_NODE:
 			return bshbus2_register_node(ctx, level, optname, optval, optlen);
+			break;
+		case BSHBUS_DBUS2_WAKEUP_PULSE:
+			return bshbus2_wakeup_pulse(ctx, level, optname);
 			break;
 		default:
 			LOG_ERR("Invalid option name %d", optname);

@@ -21,6 +21,9 @@
 LOG_MODULE_REGISTER(dummy_bshbus, CONFIG_BSHBUS_LOG_LEVEL);
 
 #define DT_DRV_COMPAT dummy_bshbus
+/* This is done to use the same thread for handling both Tx and WUP events */
+/* This can be later adapted in bshbus.h, if required in actual driver implementation */
+#define DUMMYBBUS_PENDING_EVENT_TX BIT(1)
 
 struct dummy_bshbus_tx_data {
     void *user_data;
@@ -37,9 +40,19 @@ struct dummy_bshbus_rx_data {
     K_KERNEL_STACK_MEMBER(stack, CONFIG_BSHBUS_DUMMY_THREAD_STACK_SIZE);
 };
 
+struct dummy_bshbus_wup_tx_data {
+    const struct device *dev;
+    void *user_data;
+    bshbus_dbus2_tx_callback_t cb;
+    struct k_timer wakeup_check_timer;
+    uint8_t wakeup_retry_count;
+};
+
 struct dummy_bshbus_data {
     struct dummy_bshbus_tx_data tx;
     struct dummy_bshbus_rx_data rx;
+    struct dummy_bshbus_wup_tx_data wup_tx;
+    uint16_t pending_events;
 };
 
 struct dummy_bshbus_config {
@@ -79,6 +92,9 @@ int dummybbus_send(const struct device *dev, const struct bshbus_frame_dbus2_tx 
 
     dummybbus_data->tx.user_data = user_data;
     dummybbus_data->tx.cb = cb;
+    /* BIT(1) is used for Tx here , later can be adapted in actual driver if needed*/
+    /* This is done inorder to use the same thread for handling both Tx and WUP events */
+    dummybbus_data->pending_events |= DUMMYBBUS_PENDING_EVENT_TX;
 
     k_sem_give(&dummybbus_data->tx.sem);
 
@@ -100,6 +116,48 @@ int dummybbus_add_receiver(const struct device *dev,
     return 0;
 }
 
+int dummybbus_check_wakeup_pulse(const struct dummy_bshbus_wup_tx_data *wup_data)
+{
+    LOG_DBG("Checking wakeup pulse, retry count: %d", wup_data->wakeup_retry_count);
+
+    if(wup_data->wakeup_retry_count == 0) {
+        LOG_DBG("Simulating failed wakeup pulse check");
+        return -EAGAIN;
+    } 
+    LOG_DBG("Simulating successful wakeup pulse check");
+    if (wup_data->cb) {
+        wup_data->cb(wup_data->dev, BSHBUS_FRAME_STATUS_VALID, wup_data->user_data);
+    }
+
+    return 0;
+}
+
+int dummybbus_send_wakeup_pulse(const struct device *dev,
+            bshbus_dbus2_tx_callback_t cb, void *user_data)
+{
+    struct dummy_bshbus_data *dummybbus_data = dev->data;
+
+    LOG_DBG("Send wakeup pulse on %s:", dev->name);
+
+    dummybbus_data->wup_tx.dev = dev;
+    dummybbus_data->wup_tx.user_data = user_data;
+    dummybbus_data->wup_tx.cb = cb;
+    dummybbus_data->wup_tx.wakeup_retry_count = 0;
+    dummybbus_data->pending_events |= BSHBUS_PENDING_EVENT_WUP_TX;
+    k_timer_start(&dummybbus_data->wup_tx.wakeup_check_timer, K_MSEC(15), K_NO_WAIT);
+    LOG_DBG("Timer started");
+
+    return 0;
+}
+
+static void dummybbus_wakeup_pulse_timer_handler(struct k_timer *timer)
+{
+    struct dummy_bshbus_wup_tx_data *wup_data = CONTAINER_OF(timer, struct dummy_bshbus_wup_tx_data, wakeup_check_timer);
+    struct dummy_bshbus_data *data = CONTAINER_OF(wup_data, struct dummy_bshbus_data, wup_tx);
+
+    k_sem_give(&data->tx.sem);
+}
+
 int dummybbus_remove_receiver(const struct device *dev)
 {
     LOG_DBG("Remove receiver from %s:", dev->name);
@@ -107,25 +165,59 @@ int dummybbus_remove_receiver(const struct device *dev)
     return 0;
 }
 
+static void dummybbus_handle_wakeup_pulse_timeout(struct dummy_bshbus_data *data)
+{
+    int ret;
+
+    ret = dummybbus_check_wakeup_pulse(&data->wup_tx);
+
+    if (!ret) {
+        data->wup_tx.wakeup_retry_count = 0;
+        data->pending_events &= ~BSHBUS_PENDING_EVENT_WUP_TX;
+        LOG_DBG("Wakeup pulse sent successfully");
+    }
+    else {
+        data->wup_tx.wakeup_retry_count++;
+        if (data->wup_tx.wakeup_retry_count <= 5) {
+            k_timer_start(&data->wup_tx.wakeup_check_timer, K_MSEC(1), K_NO_WAIT);
+            LOG_DBG("Timer restarted for next wakeup pulse check");
+        } else {
+            LOG_DBG("Wakeup pulse check timed out after %d retries", data->wup_tx.wakeup_retry_count);
+            data->wup_tx.wakeup_retry_count = 0;
+            data->pending_events &= ~BSHBUS_PENDING_EVENT_WUP_TX;
+            if (data->wup_tx.cb) {
+                data->wup_tx.cb(data->wup_tx.dev, BSHBUS_FRAME_STATUS_IO_ERROR, data->wup_tx.user_data);
+            }
+        }
+    }
+}
+
 static void dummybbus_tx_thread(void *p1, void *p2, void *p3)
 {
-	ARG_UNUSED(p2);
-	ARG_UNUSED(p3);
+    ARG_UNUSED(p2);
+    ARG_UNUSED(p3);
 
     const struct device *dev = p1;
-	struct dummy_bshbus_data *dummybbus_data = dev->data;
+    struct dummy_bshbus_data *dummybbus_data = dev->data;
 
     LOG_DBG("TX Thread started...");
 
-	while (true) {
-		k_sem_take(&dummybbus_data->tx.sem, K_FOREVER);
+    while (true) {
+        k_sem_take(&dummybbus_data->tx.sem, K_FOREVER);
 
-        LOG_DBG("%s TX woken up", dev->name);
-
-        if (dummybbus_data->tx.cb) {
-            dummybbus_data->tx.cb(dev, BSHBUS_FRAME_STATUS_VALID, dummybbus_data->tx.user_data);
+        if (dummybbus_data->pending_events & BSHBUS_PENDING_EVENT_WUP_TX) {
+            dummybbus_handle_wakeup_pulse_timeout(dummybbus_data);
         }
-	}
+
+        if (dummybbus_data->pending_events & DUMMYBBUS_PENDING_EVENT_TX) {
+            LOG_DBG("%s TX woken up", dev->name);
+
+            if (dummybbus_data->tx.cb) {
+                dummybbus_data->tx.cb(dev, BSHBUS_FRAME_STATUS_VALID, dummybbus_data->tx.user_data);
+            }
+            dummybbus_data->pending_events &= ~DUMMYBBUS_PENDING_EVENT_TX;
+        }
+    }
 }
 
 static void dummybbus_rx_thread(void *p1, void *p2, void *p3)
@@ -156,7 +248,15 @@ static void dummybbus_rx_thread(void *p1, void *p2, void *p3)
         } else {
             data = 0;
         }
-	}
+
+        LOG_DBG("%s Wakeup RX message received", dev->name);
+
+        bshbus_prepare_frame_dbus2_wakeup_pulse_rx(&frame);
+
+        if (dummybbus_data->rx.cb) {
+            dummybbus_data->rx.cb(dev, &frame, dummybbus_data->rx.user_data);
+        }
+    }
 }
 
 static int dummybbus_init(const struct device *dev)
@@ -168,6 +268,8 @@ static int dummybbus_init(const struct device *dev)
 
     /* Initialize int_sem to 1 to ensure any pending IRQ is serviced */
 	k_sem_init(&dummybbus_data->tx.sem, 1, 1);
+	k_timer_init(&dummybbus_data->wup_tx.wakeup_check_timer, dummybbus_wakeup_pulse_timer_handler, NULL);
+	dummybbus_data->wup_tx.wakeup_retry_count = 0;
 
 	tid = k_thread_create(&dummybbus_data->tx.thread, dummybbus_data->tx.stack,
 			      K_KERNEL_STACK_SIZEOF(dummybbus_data->tx.stack),
@@ -181,17 +283,18 @@ static int dummybbus_init(const struct device *dev)
 			      CONFIG_BSHBUS_DUMMY_THREAD_PRIO, 0, K_NO_WAIT);
 	k_thread_name_set(tid, "dummybshbus_rx");
 
-    LOG_DBG("...init finished");
+	LOG_DBG("...init finished");
 
-    return 0;
+	return 0;
 }
 
 static DEVICE_API(bshbus, dummybbus_driver_api) = {
 	.start = dummybbus_start,
 	.stop = dummybbus_stop,
 	.dbus2_send = dummybbus_send,
-    .dbus2_add_receiver = dummybbus_add_receiver,
-    .dbus2_remove_receiver = dummybbus_remove_receiver,
+	.dbus2_add_receiver = dummybbus_add_receiver,
+	.dbus2_remove_receiver = dummybbus_remove_receiver,
+	.dbus2_send_wakeup_pulse = dummybbus_send_wakeup_pulse,
 };
 
 #define DUMMYBBUS_INIT(inst)                                                    \
