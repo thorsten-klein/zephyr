@@ -552,6 +552,9 @@ class CMake:
             kwargs['stdout'] = subprocess.PIPE
             # CMake sends the output of message() to stderr unless it's STATUS
             kwargs['stderr'] = subprocess.STDOUT
+            kwargs['bufsize'] = 1
+            kwargs['text'] = True
+            kwargs['encoding'] = self.default_encoding
 
         if self.cwd:
             kwargs['cwd'] = self.cwd
@@ -563,7 +566,12 @@ class CMake:
             p = subprocess.Popen(cmd, **kwargs)
         logger.debug(f'Running {" ".join(cmd)}')
 
-        out, _ = p.communicate()
+        log_msg = ""
+        for line in p.stdout:
+            print(line.rstrip())
+            log_msg += line
+
+        p.wait()
 
         ret = {}
         duration = time.time() - start_time
@@ -582,8 +590,7 @@ class CMake:
                 self.instance.status = TwisterStatus.PASS
             ret = {"returncode": p.returncode}
 
-            if out:
-                log_msg = out.decode(self.default_encoding)
+            if log_msg:
                 with open(
                     os.path.join(self.build_dir, self.log),
                     "a",
@@ -594,9 +601,7 @@ class CMake:
                 return None
         else:
             # A real error occurred, raise an exception
-            log_msg = ""
-            if out:
-                log_msg = out.decode(self.default_encoding)
+            if log_msg:
                 with open(
                     os.path.join(self.build_dir, self.log),
                     "a",
@@ -604,7 +609,6 @@ class CMake:
                 ) as log:
                     log.write(log_msg)
 
-            if log_msg:
                 pattern = (
                     r"region `(FLASH|ROM|RAM|ICCM|DCCM|SRAM|"
                     r"dram\d_\d_seg|iram\d_\d_seg)' "
