@@ -539,6 +539,9 @@ class Pytest(Harness):
                 continue
             self._output.append(line)
             logger.debug(f'PYTEST: {line}')
+            if getattr(self.instance.handler.options, 'inline_logs', False) and \
+                    os.environ.get('WEST_TWISTER_LIVE_LOG_PYTEST', 'ON') == 'ON':
+                print(line, flush=True)
             self.parse_record(line)
         proc.communicate()
 

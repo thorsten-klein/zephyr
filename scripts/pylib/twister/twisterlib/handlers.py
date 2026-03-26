@@ -269,6 +269,8 @@ class BinaryHandler(Handler):
                     if stripped_line.endswith(suffix):
                         stripped_line = stripped_line[:-len(suffix)].rstrip()
                     logger.debug(f"OUTPUT: {stripped_line}")
+                    if getattr(self.options, 'inline_logs', False):
+                        print(stripped_line, flush=True)
                     log_out_fp.write(strip_ansi_sequences(line_decoded))
                     log_out_fp.flush()
                     harness.handle(stripped_line)
@@ -989,6 +991,8 @@ class QEMUHandler(Handler):
                 log_out_fp.flush()
                 line = line.rstrip()
                 logger.debug(f"QEMU ({pid}): {line}")
+                if getattr(handler.options, 'inline_logs', False):
+                    print(line, flush=True)
 
                 harness.handle(line)
                 if harness.status != TwisterStatus.NONE:

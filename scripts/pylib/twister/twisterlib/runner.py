@@ -11,6 +11,7 @@ import os
 import pathlib
 import pickle
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -556,6 +557,9 @@ class CMake:
             kwargs['stdout'] = subprocess.PIPE
             # CMake sends the output of message() to stderr unless it's STATUS
             kwargs['stderr'] = subprocess.STDOUT
+            kwargs['bufsize'] = 1
+            kwargs['text'] = True
+            kwargs['encoding'] = self.default_encoding
 
         if self.cwd:
             kwargs['cwd'] = self.cwd
@@ -567,7 +571,8 @@ class CMake:
             p = subprocess.Popen(cmd, **kwargs)
         logger.debug(f'Running {" ".join(cmd)}')
 
-        out, _ = p.communicate()
+        log_msg = self.live_log(p)
+        p.wait()
 
         ret = {}
         duration = time.time() - start_time
@@ -586,8 +591,7 @@ class CMake:
                 self.instance.status = TwisterStatus.PASS
             ret = {"returncode": p.returncode}
 
-            if out:
-                log_msg = out.decode(self.default_encoding)
+            if log_msg:
                 with open(
                     os.path.join(self.build_dir, self.log),
                     "a",
@@ -598,9 +602,7 @@ class CMake:
                 return None
         else:
             # A real error occurred, raise an exception
-            log_msg = ""
-            if out:
-                log_msg = out.decode(self.default_encoding)
+            if log_msg:
                 with open(
                     os.path.join(self.build_dir, self.log),
                     "a",
@@ -608,7 +610,6 @@ class CMake:
                 ) as log:
                     log.write(log_msg)
 
-            if log_msg:
                 pattern = (
                     r"region `(FLASH|ROM|RAM|ICCM|DCCM|SRAM|"
                     r"dram\d_\d_seg|iram\d_\d_seg)' "
@@ -638,6 +639,35 @@ class CMake:
             }
 
         return ret
+
+    def is_already_configured(self, cmd):
+        build_dir = pathlib.Path(self.build_dir)
+        marker_file = build_dir / "cmd.info"
+
+        configured = True
+        if not (build_dir / 'CMakeCache.txt' ).exists():
+            configured = False
+
+        content = [shlex.join(cmd)]
+        content += [f"{k}={v}" for k, v in os.environ.items()]
+        content_str = "\n".join(content)
+
+        if not marker_file.exists() or marker_file.read_text() != content_str:
+            configured = False
+
+        marker_file.parent.mkdir(parents=True, exist_ok=True)
+        marker_file.write_text(content_str)
+
+        return configured
+
+    def live_log(self, process):
+        inline_logs = getattr(getattr(self, 'options', None), 'inline_logs', False)
+        out = ""
+        for line in process.stdout:
+            if inline_logs:
+                print(line.rstrip())
+            out += line
+        return out
 
     def run_cmake(self, args="", filter_stages=None):
         if filter_stages is None:
@@ -716,12 +746,21 @@ class CMake:
 
         kwargs = dict()
 
+        if self.is_already_configured(cmd):
+            return {
+                'returncode': 0,
+                'filter': []
+            }
+
         log_command(logger, "Calling cmake", cmd)
 
         if self.capture_output:
             kwargs['stdout'] = subprocess.PIPE
             # CMake sends the output of message() to stderr unless it's STATUS
             kwargs['stderr'] = subprocess.STDOUT
+            kwargs['bufsize'] = 1
+            kwargs['text'] = True
+            kwargs['encoding'] = self.default_encoding
 
         if self.cwd:
             kwargs['cwd'] = self.cwd
@@ -731,7 +770,9 @@ class CMake:
             p = self.jobserver.popen(cmd, **kwargs)
         else:
             p = subprocess.Popen(cmd, **kwargs)
-        out, _ = p.communicate()
+
+        out = self.live_log(p)
+        p.wait()
 
         duration = time.time() - start_time
         self.instance.build_time += duration
@@ -764,8 +805,7 @@ class CMake:
                 "a",
                 encoding=self.default_encoding
             ) as log:
-                log_msg = out.decode(self.default_encoding)
-                log.write(log_msg)
+                log.write(out)
 
         return ret
 
