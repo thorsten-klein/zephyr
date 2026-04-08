@@ -654,6 +654,9 @@ class CMake:
         if self.instance.sysbuild:
             warning_command = 'SB_' + warning_command
 
+        if (pathlib.Path(self.build_dir) / "CMakeCache.txt").exists():
+            return {"returncode": 0}
+
         logger.debug(f"Running cmake on {self.source_dir} for {self.platform.name}")
         cmake_args = [
             f'-B{self.build_dir}',
