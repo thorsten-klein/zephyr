@@ -11,6 +11,7 @@ import os
 import pathlib
 import pickle
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -566,11 +567,7 @@ class CMake:
             p = subprocess.Popen(cmd, **kwargs)
         logger.debug(f'Running {" ".join(cmd)}')
 
-        log_msg = ""
-        for line in p.stdout:
-            print(line.rstrip())
-            log_msg += line
-
+        log_msg = self.live_log(p)
         p.wait()
 
         ret = {}
@@ -639,6 +636,33 @@ class CMake:
 
         return ret
 
+    def is_already_configured(self, cmd):
+        build_dir = pathlib.Path(self.build_dir)
+        marker_file = build_dir / "cmd.info"
+
+        configured = True
+        if not (build_dir / 'CMakeCache.txt' ).exists():
+            configured = False
+
+        content = [shlex.join(cmd)]
+        content += [f"{k}={v}" for k, v in os.environ.items()]
+        content_str = "\n".join(content)
+
+        if not marker_file.exists() or marker_file.read_text() != content_str:
+            configured = False
+
+        marker_file.parent.mkdir(parents=True, exist_ok=True)
+        marker_file.write_text(content_str)
+
+        return configured
+
+    def live_log(self, process):
+        out = ""
+        for line in process.stdout:
+            print(line.rstrip())
+            out += line
+        return out
+
     def run_cmake(self, args="", filter_stages=None):
         if filter_stages is None:
             filter_stages = []
@@ -653,9 +677,6 @@ class CMake:
         warning_command = 'CONFIG_COMPILER_WARNINGS_AS_ERRORS'
         if self.instance.sysbuild:
             warning_command = 'SB_' + warning_command
-
-        if (pathlib.Path(self.build_dir) / "CMakeCache.txt").exists():
-            return {"returncode": 0}
 
         logger.debug(f"Running cmake on {self.source_dir} for {self.platform.name}")
         cmake_args = [
@@ -719,12 +740,21 @@ class CMake:
 
         kwargs = dict()
 
+        if self.is_already_configured(cmd):
+            return {
+                'returncode': 0,
+                'filter': []
+            }
+
         log_command(logger, "Calling cmake", cmd)
 
         if self.capture_output:
             kwargs['stdout'] = subprocess.PIPE
             # CMake sends the output of message() to stderr unless it's STATUS
             kwargs['stderr'] = subprocess.STDOUT
+            kwargs['bufsize'] = 1
+            kwargs['text'] = True
+            kwargs['encoding'] = self.default_encoding
 
         if self.cwd:
             kwargs['cwd'] = self.cwd
@@ -734,7 +764,9 @@ class CMake:
             p = self.jobserver.popen(cmd, **kwargs)
         else:
             p = subprocess.Popen(cmd, **kwargs)
-        out, _ = p.communicate()
+
+        out = self.live_log(p)
+        p.wait()
 
         duration = time.time() - start_time
         self.instance.build_time += duration
@@ -767,8 +799,7 @@ class CMake:
                 "a",
                 encoding=self.default_encoding
             ) as log:
-                log_msg = out.decode(self.default_encoding)
-                log.write(log_msg)
+                log.write(out)
 
         return ret
 
