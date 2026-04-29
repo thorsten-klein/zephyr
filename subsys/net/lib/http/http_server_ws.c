@@ -17,7 +17,15 @@
 #include <zephyr/net/net_log.h>
 #include <zephyr/sys/base64.h>
 #include <zephyr/net/websocket.h>
+#if defined(CONFIG_WOLFSSL)
+#ifndef WOLFSSL_USER_SETTINGS
+#define WOLFSSL_USER_SETTINGS
+#include <user_settings.h>
+#endif
+#include <wolfssl/wolfcrypt/hash.h>
+#else
 #include <psa/crypto.h>
+#endif
 
 LOG_MODULE_DECLARE(net_http_server, CONFIG_NET_HTTP_SERVER_LOG_LEVEL);
 
@@ -41,12 +49,16 @@ int handle_http1_to_websocket_upgrade(struct http_client_ctx *client)
 		"Sec-WebSocket-Accept: ";
 	char key_accept[HTTP_SERVER_WS_MAX_SEC_KEY_LEN + sizeof(WS_MAGIC)];
 	char accept[20];
+#ifndef CONFIG_WOLFSSL
 	size_t accept_len;
+#endif
 	char tmp[64];
 	size_t key_len;
 	size_t olen;
 	int ret;
+#ifndef CONFIG_WOLFSSL
 	psa_status_t psa_status;
+#endif
 
 	key_len = MIN(sizeof(key_accept) - 1, sizeof(client->ws_sec_key));
 	strncpy(key_accept, client->ws_sec_key, key_len);
@@ -55,6 +67,14 @@ int handle_http1_to_websocket_upgrade(struct http_client_ctx *client)
 	olen = MIN(sizeof(key_accept) - 1 - key_len, sizeof(WS_MAGIC) - 1);
 	memcpy(key_accept + key_len, WS_MAGIC, olen);
 
+#if defined(CONFIG_WOLFSSL)
+	ret = wc_ShaHash((const byte *)key_accept, olen + key_len, (byte *)accept);
+	if (ret != 0) {
+		NET_DBG("[%p] Cannot calculate sha1 (%d)", client, ret);
+		ret = -EPROTO;
+		goto error;
+	}
+#else
 	psa_status = psa_hash_compute(PSA_ALG_SHA_1, key_accept, olen + key_len,
 			 accept, sizeof(accept), &accept_len);
 	if (psa_status != PSA_SUCCESS) {
@@ -62,6 +82,7 @@ int handle_http1_to_websocket_upgrade(struct http_client_ctx *client)
 		ret = -EIO;
 		goto error;
 	}
+#endif
 
 	ret = base64_encode(tmp, sizeof(tmp) - 1, &olen, accept, sizeof(accept));
 	if (ret) {

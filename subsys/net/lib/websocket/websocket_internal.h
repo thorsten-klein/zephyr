@@ -11,9 +11,14 @@
  */
 
 #include <zephyr/toolchain/common.h>
+#if defined(CONFIG_WOLFSSL)
+/* wolfSSL backend computes SHA-1 directly; PSA crypto is not pulled in. */
+#define WS_SHA1_OUTPUT_LEN 20
+#else
 #include <psa/crypto.h>
-
 #define WS_SHA1_OUTPUT_LEN PSA_HASH_LENGTH(PSA_ALG_SHA_1)
+#endif
+
 
 /* Min Websocket header length */
 #define MIN_HEADER_LEN 2

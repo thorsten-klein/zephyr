@@ -31,7 +31,15 @@ LOG_MODULE_REGISTER(net_websocket, CONFIG_NET_WEBSOCKET_LOG_LEVEL);
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/base64.h>
 
+#if defined(CONFIG_WOLFSSL)
+#ifndef WOLFSSL_USER_SETTINGS
+#define WOLFSSL_USER_SETTINGS
+#include <user_settings.h>
+#endif
+#include <wolfssl/wolfcrypt/hash.h>
+#else
 #include <psa/crypto.h>
+#endif
 
 #include "net_private.h"
 #include "sockets_internal.h"
@@ -250,8 +258,10 @@ int websocket_connect(int sock, struct websocket_request *wreq,
 		"Sec-WebSocket-Version: 13\r\n",
 		NULL
 	};
+#ifndef CONFIG_WOLFSSL
 	psa_status_t psa_status;
 	size_t hash_length;
+#endif
 
 	fd = -1;
 
@@ -279,6 +289,14 @@ int websocket_connect(int sock, struct websocket_request *wreq,
 	ctx->http_cb = wreq->http_cb;
 	ctx->is_client = 1;
 
+#if defined(CONFIG_WOLFSSL)
+	ret = wc_ShaHash((const byte *)&rnd_value, sizeof(rnd_value), sec_accept_key);
+	if (ret != 0) {
+		NET_DBG("[%p] Cannot calculate sha1 (%d)", ctx, ret);
+		ret = -EPROTO;
+		goto out;
+	}
+#else
 	psa_status = psa_hash_compute(PSA_ALG_SHA_1, (const uint8_t *)&rnd_value, sizeof(rnd_value),
 				      sec_accept_key, sizeof(sec_accept_key), &hash_length);
 	if (psa_status != PSA_SUCCESS) {
@@ -286,6 +304,7 @@ int websocket_connect(int sock, struct websocket_request *wreq,
 		ret = -EPROTO;
 		goto out;
 	}
+#endif
 
 	ret = base64_encode(sec_ws_key + sizeof("Sec-Websocket-Key: ") - 1,
 			    sizeof(sec_ws_key) -
@@ -348,6 +367,14 @@ int websocket_connect(int sock, struct websocket_request *wreq,
 	memcpy(key_accept + key_len, WS_MAGIC, olen);
 
 	/* This SHA-1 value is then checked when we receive the response */
+#if defined(CONFIG_WOLFSSL)
+	ret = wc_ShaHash((const byte *)key_accept, olen + key_len, sec_accept_key);
+	if (ret != 0) {
+		NET_DBG("[%p] Cannot calculate sha1 (%d)", ctx, ret);
+		ret = -EPROTO;
+		goto out;
+	}
+#else
 	psa_status = psa_hash_compute(PSA_ALG_SHA_1, (const uint8_t *)key_accept, olen + key_len,
 				      sec_accept_key, sizeof(sec_accept_key), &hash_length);
 	if (psa_status != PSA_SUCCESS) {
@@ -355,6 +382,7 @@ int websocket_connect(int sock, struct websocket_request *wreq,
 		ret = -EPROTO;
 		goto out;
 	}
+#endif
 
 	ret = http_client_req(sock, &req, timeout, ctx);
 	if (ret < 0) {

@@ -3886,27 +3886,26 @@ static int tls_check_cert(struct tls_credential *cert)
 #if defined(CONFIG_WOLFSSL)
 	/* Parse the cert here so setsockopt(TLS_SEC_TAG_LIST) returns EINVAL
 	 * on malformed credentials (mbedTLS-parity contract exercised by
-	 * test_tls_bad_cred). The X509 is freed immediately so no peer-cert
-	 * retention is needed — the OPENSSL_EXTRA_X509_SMALL arm of the gate
-	 * (see modules/crypto/wolfssl/src/x509.c:6055) is our downstream
-	 * relaxation so KEEP_PEER_CERT isn't forced just for validation.
+	 * test_tls_bad_cred). For DER, use the lower-level
+	 * InitDecodedCert/ParseCert API so the build does not require
+	 * wolfSSL_X509_load_certificate_buffer (which is gated behind
+	 * OPENSSL_EXTRA / KEEP_PEER_CERT). PEM credentials are accepted
+	 * without validation as wolfSSL handles them internally during the
+	 * actual handshake.
 	 */
-	WOLFSSL_X509 *x509;
-	int fmt;
+	if (!crt_is_pem(cert->buf, cert->len)) {
+		DecodedCert dc;
+		int ret;
 
-	fmt = crt_is_pem(cert->buf, cert->len) ?
-	      WOLFSSL_FILETYPE_PEM : WOLFSSL_FILETYPE_ASN1;
-
-	x509 = wolfSSL_X509_load_certificate_buffer(cert->buf,
-						     (int)cert->len, fmt);
-	if (x509 == NULL) {
-		NET_ERR("Failed to parse %s on tag %d",
-			"certificate", cert->tag);
-		return -EINVAL;
+		InitDecodedCert(&dc, cert->buf, (word32)cert->len, NULL);
+		ret = ParseCert(&dc, CERT_TYPE, NO_VERIFY, NULL);
+		FreeDecodedCert(&dc);
+		if (ret < 0) {
+			NET_ERR("Failed to parse %s on tag %d",
+				"certificate", cert->tag);
+			return -EINVAL;
+		}
 	}
-
-	wolfSSL_X509_free(x509);
-
 	return 0;
 #else
 #if defined(CONFIG_MBEDTLS_X509_CRT_PARSE_C)
