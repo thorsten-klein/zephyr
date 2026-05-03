@@ -7,8 +7,12 @@ if(CONFIG_TC_PROVIDES_POSIX_C_LIB_EXT)
 endif()
 
 zephyr_library()
+if(NOT CONFIG_NATIVE_LIBC)
+  zephyr_library_sources(
+    fnmatch.c
+    getentropy.c
+  )
+endif()
 zephyr_library_sources(
-  fnmatch.c
-  getentropy.c
   getopt_shim.c
 )

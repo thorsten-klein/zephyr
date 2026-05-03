@@ -4,7 +4,7 @@
 add_compile_options($<TARGET_PROPERTY:compiler,warning_shadow_variables>)
 
 add_subdirectory(libc)
-if(NOT CONFIG_NATIVE_LIBC)
+if(NOT CONFIG_NATIVE_LIBC OR CONFIG_POSIX_C_LIB_EXT)
 add_subdirectory(posix)
 endif()
 add_subdirectory_ifdef(CONFIG_CPP                  cpp)
