@@ -2278,8 +2278,14 @@ static int tls_add_own_cert(struct tls_context *tls,
 	if (crt_is_pem(own_cert->buf, own_cert->len)) {
 		format = WOLFSSL_FILETYPE_PEM;
 	}
-	ret = wolfSSL_CTX_use_certificate_buffer(tls->ctx, own_cert->buf,
-						 own_cert->len, format);
+
+	/* Use chain variant so intermediate CAs in the PEM are also
+	 * loaded and sent to the peer during the TLS handshake. */
+	ret = wolfSSL_CTX_use_certificate_chain_buffer_format(tls->ctx,
+						       own_cert->buf,
+						       own_cert->len,
+						       format);
+
 	if (ret != WOLFSSL_SUCCESS) {
 		NET_ERR("Failed to parse certificate");
 		return -EINVAL;
