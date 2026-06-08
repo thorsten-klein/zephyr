@@ -238,7 +238,7 @@ class Blobs(WestCommand):
         path = Path(blob['abspath'])
 
         # collect existing cache dirs specified as args, otherwise from west config
-        cache_dirs = args.cache_dirs
+        cache_dirs = args.cache_dirs or os.getenv("WEST_BLOBS_CACHE_DIRS")
         auto_cache_dir = args.auto_cache
         if self.has_config:
             if cache_dirs is None:
