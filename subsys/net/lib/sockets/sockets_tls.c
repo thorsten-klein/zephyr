@@ -3902,6 +3902,24 @@ static int tls_wolfssl_init(struct tls_context *context, bool is_server)
 		goto err_cleanup;
 	}
 
+#if defined(CONFIG_BSHG_TLS_CLIENT_ENABLE_OCSP_STAPLING)
+	if (!is_server)
+	{
+		if (wolfSSL_CTX_EnableOCSPStapling(context->ctx) != WOLFSSL_SUCCESS)
+		{
+			NET_ERR("Failed to enable OCSP stapling.");
+			ret = -EINVAL;
+			goto err_cleanup;
+		}
+		if (wolfSSL_CTX_UseOCSPStapling(context->ctx, WOLFSSL_CSR_OCSP, 0) != WOLFSSL_SUCCESS)
+		{
+			NET_ERR("Failed to use OCSP stapling.");
+			ret = -EINVAL;
+			goto err_cleanup;
+		}
+	}
+#endif
+
 	ret = tls_wolfssl_session_init(context->active_session, context,
 				       is_server);
 	if (ret != 0) {
