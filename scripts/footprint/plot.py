@@ -94,6 +94,8 @@ def generate_figure(data, depth=4):
             hovertext=hovertext,
             branchvalues='total',
             maxdepth=depth,
+            textinfo='label+value',
+            insidetextorientation='radial',
         ),
         skip_invalid=True,
     )
