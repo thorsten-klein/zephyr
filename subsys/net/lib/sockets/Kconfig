@@ -497,6 +497,19 @@ config NET_SOCKETS_CAN_RECEIVERS
 	  The value tells how many sockets can receive data from same
 	  Socket-CAN interface.
 
+config NET_SOCKETS_BSHBUS_DBUS2
+	bool "D-Bus-2 protocol for SocketBSHBUS"
+	select NET_SOCKETS_BSHBUS
+
+config NET_SOCKETS_BSHBUS2_RECEIVERS
+	int "Maximum number of simultaneous D-Bus-2 SocketBSHBUS receivers"
+	default 1
+	range 1 3
+	depends on NET_SOCKETS_BSHBUS_DBUS2
+	help
+	  The value configures how many sockets can be registered to the
+	  SocketBSHBUS interface.
+
 config NET_SOCKETPAIR
 	bool "Support for socketpair"
 	help

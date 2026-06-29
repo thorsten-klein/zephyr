@@ -48,6 +48,7 @@ extern "C" {
 #define NET_PF_CAN      4            /**< Controller Area Network.      */
 #define NET_PF_NET_MGMT 5            /**< Network management info.      */
 #define NET_PF_LOCAL    6            /**< Inter-process communication   */
+#define NET_PF_BSHBUS   7            /**< BSH Bus                  */
 #define NET_PF_UNIX     NET_PF_LOCAL /**< Inter-process communication   */
 
 /* Address families. */
@@ -59,6 +60,7 @@ extern "C" {
 #define NET_AF_NET_MGMT    NET_PF_NET_MGMT /**< Network management info.      */
 #define NET_AF_LOCAL       NET_PF_LOCAL    /**< Inter-process communication   */
 #define NET_AF_UNIX        NET_PF_UNIX     /**< Inter-process communication   */
+#define NET_AF_BSHBUS      NET_PF_BSHBUS   /**< BSH Bus                       */
 
 /** Protocol numbers from IANA/BSD */
 enum net_ip_protocol {
@@ -278,6 +280,11 @@ struct net_sockaddr_un_ptr {
 struct net_sockaddr_can_ptr {
 	net_sa_family_t can_family;
 	int             can_ifindex;
+};
+
+struct net_sockaddr_bshbus_ptr {
+    net_sa_family_t bshbus_family;
+    int         bshbus_ifindex;
 };
 
 /** @endcond */
@@ -1986,6 +1993,20 @@ static inline
 struct net_sockaddr_can_ptr *net_can_ptr(const struct net_sockaddr_ptr *addr)
 {
 	return (struct net_sockaddr_can_ptr *)addr;
+}
+
+/**
+ * @brief Get sockaddr_bshbus_ptr from sockaddr_ptr. This is a helper so that
+ * the code needing this functionality can be made shorter.
+ *
+ * @param addr Socket address
+ *
+ * @return Pointer to BSHBus socket address
+ */
+static inline
+struct net_sockaddr_bshbus_ptr *net_bshbus_ptr(const struct net_sockaddr_ptr *addr)
+{
+    return (struct net_sockaddr_bshbus_ptr *)addr;
 }
 
 /**

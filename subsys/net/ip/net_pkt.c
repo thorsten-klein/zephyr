@@ -67,6 +67,9 @@ BUILD_ASSERT(CONFIG_NET_BUF_DATA_SIZE >= 96);
  */
 #define MAX_IP_PROTO_LEN 8
 #else
+#if defined(CONFIG_NET_SOCKETS_BSHBUS)
+#define MAX_IP_PROTO_LEN 8
+#else
 #if defined(CONFIG_NET_ETHERNET_BRIDGE) || \
 	defined(CONFIG_NET_L2_IEEE802154) || \
 	defined(CONFIG_NET_L2_CUSTOM_IEEE802154)
@@ -75,6 +78,7 @@ BUILD_ASSERT(CONFIG_NET_BUF_DATA_SIZE >= 96);
 #error "Some packet protocol (e.g. IPv6, IPv4, ETH, IEEE 802.15.4) needs to be selected."
 #endif /* ETHERNET_BRIDGE / L2_IEEE802154 */
 #endif /* SOCKETS_CAN */
+#endif /* SOCKETS_BSHBUS */
 #endif /* IPv4 */
 #endif /* IPv6 */
 
