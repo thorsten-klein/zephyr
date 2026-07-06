@@ -58,7 +58,7 @@ class JLinkBinaryRunner(ZephyrBinaryRunner):
                  rtt_port=DEFAULT_JLINK_RTT_PORT,
                  rtt_channel=None,
                  tui=False, tool_opt=None, dev_id_type=None, batch=False,
-                 pre_script_cmds=None):
+                 pre_script_cmds=None, jlink_devices_xml=None):
         super().__init__(cfg)
         self.file = cfg.file
         self.file_type = cfg.file_type
@@ -88,6 +88,7 @@ class JLinkBinaryRunner(ZephyrBinaryRunner):
         self.dev_id_type = dev_id_type
         self.is_batch = batch
         self.pre_script_cmds = pre_script_cmds
+        self.jlink_devices_xml = jlink_devices_xml
 
         self.tool_opt = []
         if tool_opt is not None:
@@ -213,6 +214,9 @@ class JLinkBinaryRunner(ZephyrBinaryRunner):
         parser.add_argument('--pre-script-cmd', action='append', dest='pre_script_cmds',
                             help='Custom JLink command to prepend to the runner.jlink. Can be '
                             'given multiple times. ArgParse should preserve their order.')
+        parser.add_argument('--jlink-devices-xml', default=None,
+                            dest='jlink_devices_xml',
+                            help='Path to a JLinkDevices.xml file for custom device support')
 
         parser.set_defaults(reset=False)
 
@@ -237,7 +241,8 @@ class JLinkBinaryRunner(ZephyrBinaryRunner):
                                  tui=args.tui, tool_opt=args.tool_opt,
                                  dev_id_type=args.dev_id_type,
                                  batch=args.batch,
-                                 pre_script_cmds=args.pre_script_cmds)
+                                 pre_script_cmds=args.pre_script_cmds,
+                                 jlink_devices_xml=args.jlink_devices_xml)
 
     def print_gdbserver_message(self):
         if not self.thread_info_enabled:
@@ -372,6 +377,8 @@ class JLinkBinaryRunner(ZephyrBinaryRunner):
             + (['-nogui'] if self.supports_nogui else [])
             + (['-rtos', plugin_dir] if rtos else [])
             + ['-rtttelnetport', str(self.rtt_port)]
+            + (['-JLinkDevicesXMLPath', self.jlink_devices_xml]
+               if self.jlink_devices_xml else [])
             + self.tool_opt
         )
 
@@ -472,6 +479,13 @@ class JLinkBinaryRunner(ZephyrBinaryRunner):
 
         lines += [
             'ExitOnError 1',  # Treat any command-error as fatal
+        ]
+
+        if self.jlink_devices_xml:
+            lines.append(f'exec JLinkDevicesXMLPath {self.jlink_devices_xml}')
+            self.logger.info("Using JLinkDevices.xml from {}".format(self.jlink_devices_xml))
+
+        lines += [
             'r',  # Reset and halt the target
             'BE' if self.build_conf.getboolean('CONFIG_BIG_ENDIAN') else 'LE'
         ]
