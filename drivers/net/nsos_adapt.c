@@ -924,7 +924,8 @@ void nsos_adapt_poll_add(struct nsos_mid_pollfd *pollfd)
 
 	err = epoll_ctl(nsos_epoll_fd, EPOLL_CTL_ADD, pollfd->fd, &ev);
 	if (err) {
-		nsi_print_error_and_exit("error in EPOLL_CTL_ADD: errno=%d\n", errno);
+		nsi_print_error_and_exit("error in EPOLL_CTL_ADD fd=%d: errno=%d\n",
+					 pollfd->fd, errno);
 		return;
 	}
 
@@ -938,7 +939,14 @@ void nsos_adapt_poll_remove(struct nsos_mid_pollfd *pollfd)
 
 	err = epoll_ctl(nsos_epoll_fd, EPOLL_CTL_DEL, pollfd->fd, NULL);
 	if (err) {
-		nsi_print_error_and_exit("error in EPOLL_CTL_DEL: errno=%d\n", errno);
+		if (errno == ENOENT) {
+			/* fd was already removed from epoll (e.g. closed before deregister) */
+			nsi_print_warning("warning in EPOLL_CTL_DEL fd=%d: already removed (errno=%d)\n",
+					  pollfd->fd, errno);
+		} else {
+			nsi_print_error_and_exit("error in EPOLL_CTL_DEL fd=%d: errno=%d\n",
+						 pollfd->fd, errno);
+		}
 		return;
 	}
 

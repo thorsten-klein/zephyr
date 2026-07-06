@@ -209,6 +209,7 @@ static int nsos_socket_create(int family, int type, int proto)
 	sock->fd = fd;
 	sock->recv_timeout = K_FOREVER;
 	sock->send_timeout = K_FOREVER;
+	sys_dnode_init(&sock->poll.node);
 
 	sock->poll.mid.fd = nsos_adapt_socket(family_mid, type_mid, proto_mid);
 	if (sock->poll.mid.fd < 0) {
@@ -265,16 +266,39 @@ static int nsos_close(void *obj)
 	struct nsos_socket *sock = obj;
 	struct nsos_socket_poll *poll;
 	int ret;
+	bool was_polled;
+
+	/* If the socket's own poll is still registered in epoll (e.g. because
+	 * the Zephyr-level poll was cancelled without going through POLL_UPDATE,
+	 * leaving the underlying epoll entry live), remove it now before closing
+	 * the host fd.  Without this, the host fd number gets recycled by the OS
+	 * and a new socket might receive stale epoll events with a dangling
+	 * data.ptr pointing to the freed nsos_socket.
+	 */
+	was_polled = sys_dnode_is_linked(&sock->poll.node);
+	if (was_polled) {
+		nsos_adapt_poll_remove(&sock->poll.mid);
+		sys_dlist_remove(&sock->poll.node);
+	}
 
 	ret = nsi_host_close(sock->poll.mid.fd);
 	if (ret < 0) {
 		errno = nsos_adapt_get_zephyr_errno();
 	}
 
-	SYS_DLIST_FOR_EACH_CONTAINER(&nsos_polls, poll, node) {
-		if (poll == &sock->poll) {
-			poll->mid.revents = ZSOCK_POLLHUP;
-			poll->mid.cb(&poll->mid);
+	/* Notify any waiter that the socket is gone. When the early-remove path
+	 * above fired, sock->poll.node is no longer in nsos_polls so the loop
+	 * below would miss it -- use was_polled to send POLLHUP directly instead.
+	 */
+	if (was_polled) {
+		sock->poll.mid.revents = ZSOCK_POLLHUP;
+		sock->poll.mid.cb(&sock->poll.mid);
+	} else {
+		SYS_DLIST_FOR_EACH_CONTAINER(&nsos_polls, poll, node) {
+			if (poll == &sock->poll) {
+				poll->mid.revents = ZSOCK_POLLHUP;
+				poll->mid.cb(&poll->mid);
+			}
 		}
 	}
 
@@ -802,6 +826,7 @@ static int nsos_accept(void *obj, struct net_sockaddr *addr, net_socklen_t *addr
 
 	conn_sock->fd = zephyr_fd;
 	conn_sock->poll.mid.fd = adapt_fd;
+	sys_dnode_init(&conn_sock->poll.node);
 
 	zvfs_finalize_typed_fd(zephyr_fd, conn_sock, &nsos_socket_fd_op_vtable.fd_vtable,
 			       ZVFS_MODE_IFSOCK);
