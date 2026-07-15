@@ -3042,10 +3042,18 @@ static int tls_wolfssl_set_session_cache_mode(struct tls_context *context)
 
 /* Server side does not auto-match a hostname against the peer
  * (mbedTLS parity: mbedtls_ssl_set_hostname() is a client-only concept).
- * For clients, SNI is registered here; the CN/SAN match itself is
- * performed inside the verify callback against the leaf certificate
- * via wolfSSL_X509_check_host(), which avoids wolfSSL_check_domain_name()'s
- * strict FQDN syntax requirement.
+ * For clients, SNI is registered here. The CN/SAN match itself is done one
+ * of two ways depending on what's available in this wolfSSL build:
+ *  - When OPENSSL_EXTRA/OPENSSL_EXTRA_X509_SMALL is defined,
+ *    WOLFSSL_X509_STORE_CTX::current_cert is available and the match is
+ *    performed against the leaf certificate directly in the verify
+ *    callback via wolfSSL_X509_check_host() (see
+ *    tls_wolfssl_apply_leaf_hostname_check() below).
+ *  - Otherwise, current_cert isn't available, so the hostname is instead
+ *    handed to wolfSSL_check_domain_name(), which makes wolfSSL's own
+ *    certificate processing enforce the CN/SAN match natively (SAN-first,
+ *    falling back to CN, wildcard-aware) and surface a mismatch as
+ *    DOMAIN_NAME_MISMATCH via the regular verify-callback error path.
  */
 static int tls_wolfssl_set_hostname(struct tls_context *context,
 				    struct tls_session_context *session_ctx)
@@ -3074,11 +3082,22 @@ static int tls_wolfssl_set_hostname(struct tls_context *context,
 				   context->host_len) != WOLFSSL_SUCCESS) {
 			return -EINVAL;
 		}
+#if defined(OPENSSL_EXTRA) || defined(OPENSSL_EXTRA_X509_SMALL)
+		/* No current_cert available for the leaf-based check below;
+		 * use wolfSSL's native domain-name verification instead.
+		 */
+		if (wolfSSL_check_domain_name(session_ctx->wssl,
+					      (const char *)context->host_name) !=
+		    WOLFSSL_SUCCESS) {
+			return -EINVAL;
+		}
+#endif
 	}
 
 	return 0;
 }
 
+#if defined(OPENSSL_EXTRA) || defined(OPENSSL_EXTRA_X509_SMALL)
 /* Returns true when the leaf cert's CN/SAN matches the hostname configured
  * on this client context. Only called once a hostname is known to be set.
  */
@@ -3128,6 +3147,7 @@ static void tls_wolfssl_apply_leaf_hostname_check(struct tls_context *context,
 	session_ctx->verify_result_flags |= MBEDTLS_X509_BADCERT_CN_MISMATCH;
 	*effective_ok = 0;
 }
+#endif /* OPENSSL_EXTRA || OPENSSL_EXTRA_X509_SMALL */
 
 /* Map wolfSSL verify error to mbedTLS flag bits. */
 static uint32_t tls_wolfssl_error_to_mbedtls_flags(int error)
@@ -3192,7 +3212,9 @@ static int tls_wolfssl_verify_accumulate_cb(int preverify_ok,
 			tls_wolfssl_error_to_mbedtls_flags(store->error);
 	}
 
+#if defined(OPENSSL_EXTRA) || defined(OPENSSL_EXTRA_X509_SMALL)
 	tls_wolfssl_apply_leaf_hostname_check(context, session_ctx, store, &effective_ok);
+#endif
 
 	/* OPTIONAL: return 1 so handshake continues after recording flags.
 	 * Surface a warning when we're about to silently let an invalid
@@ -3237,11 +3259,13 @@ static int tls_wolfssl_verify_cb_wrapper(int preverify_ok,
 			tls_wolfssl_error_to_mbedtls_flags(store->error);
 	}
 
+#if defined(OPENSSL_EXTRA) || defined(OPENSSL_EXTRA_X509_SMALL)
 	/* Mirror the accumulator's leaf hostname match so the application's
 	 * verify callback sees a consistent preverify_ok regardless of
 	 * whether it overrides the default accumulator.
 	 */
 	tls_wolfssl_apply_leaf_hostname_check(context, session_ctx, store, &effective_ok);
+#endif
 
 	user_cb = context->options.cert_verify_wolfssl.cb;
 	user_ctx = context->options.cert_verify_wolfssl.ctx;
@@ -3480,8 +3504,10 @@ static int tls_wolfssl_apply_all_sessions(
 }
 
 /* Apply all per-SSL-object settings. Runs both on first session init and
- * again after wolfSSL_clear() in tls_wolfssl_reset_session — wolfSSL_clear
- * drops per-SSL state configured after wolfSSL_new().
+ * again after tls_wolfssl_reset_session() gets the SSL object back to a
+ * reusable post-init state (either via wolfSSL_clear(), or by recreating
+ * the object where that isn't available) — both drop per-SSL state
+ * configured after wolfSSL_new().
  */
 static int tls_wolfssl_session_setup(struct tls_session_context *session_ctx,
 				     struct tls_context *tls_ctx, bool is_server)
@@ -3938,27 +3964,6 @@ err_cleanup:
 
 	return ret;
 }
-#endif /* CONFIG_WOLFSSL */
-
-#if defined(CONFIG_WOLFSSL)
-/* wolfSSL_X509_load_certificate_buffer is gated in
- * modules/crypto/wolfssl/src/x509.c around line 6055 on
- *   OPENSSL_EXTRA || OPENSSL_EXTRA_X509_SMALL || WOLFSSL_WPAS_SMALL ||
- *   KEEP_PEER_CERT || SESSION_CERTS
- * (the OPENSSL_EXTRA_X509_SMALL arm is our downstream patch). The Zephyr
- * TLS sockets backend force-selects WOLFSSL_OPENSSL_EXTRA_X509_SMALL, so
- * the function is normally available — but if a wolfSSL uprev drops the
- * downstream patch and no user-supplied flag fills the gap, the build
- * would fail with an obscure linker error. Fail loudly here instead.
- */
-#if !defined(OPENSSL_EXTRA) && !defined(OPENSSL_EXTRA_X509_SMALL) && \
-    !defined(WOLFSSL_WPAS_SMALL) && !defined(KEEP_PEER_CERT) && \
-    !defined(SESSION_CERTS)
-#error "tls_check_cert needs wolfSSL_X509_load_certificate_buffer. Either "\
-       "re-apply the modules/crypto/wolfssl/src/x509.c gate-relaxation "\
-       "patch (OPENSSL_EXTRA_X509_SMALL) or enable one of OPENSSL_EXTRA, "\
-       "WOLFSSL_WPAS_SMALL, KEEP_PEER_CERT, SESSION_CERTS."
-#endif /* X509 gate flags */
 #endif /* CONFIG_WOLFSSL */
 
 static int tls_check_cert(struct tls_credential *cert)
