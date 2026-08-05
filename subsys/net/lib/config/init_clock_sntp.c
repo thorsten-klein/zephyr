@@ -50,7 +50,8 @@ static int sntp_init_helper(struct sntp_time *tm)
 			   CONFIG_NET_CONFIG_SNTP_INIT_TIMEOUT, tm);
 }
 
-__maybe_unused static int timespec_to_rtc_time(const struct timespec *in, struct rtc_time *out)
+#ifdef CONFIG_NET_CONFIG_CLOCK_SNTP_SET_RTC
+static int timespec_to_rtc_time(const struct timespec *in, struct rtc_time *out)
 {
 	if (gmtime_r(&in->tv_sec, rtc_time_to_tm(out)) == NULL) {
 		return -EINVAL;
@@ -60,6 +61,7 @@ __maybe_unused static int timespec_to_rtc_time(const struct timespec *in, struct
 
 	return 0;
 }
+#endif /* CONFIG_NET_CONFIG_CLOCK_SNTP_SET_RTC */
 
 static void sntp_set_rtc(__maybe_unused const struct timespec *tspec)
 {
@@ -354,6 +356,18 @@ out:
 #endif /* CONFIG_NET_CONFIG_SNTP_INIT_RESYNC */
 
 #ifdef CONFIG_NET_CONFIG_SNTP_INIT_USE_CONNECTION_MANAGER
+
+#if defined(CONFIG_NET_CONFIG_SNTP_INIT_L4_EVENT_IPV4)
+#define SNTP_L4_CONNECTED    NET_EVENT_L4_IPV4_CONNECTED
+#define SNTP_L4_DISCONNECTED NET_EVENT_L4_IPV4_DISCONNECTED
+#elif defined(CONFIG_NET_CONFIG_SNTP_INIT_L4_EVENT_IPV6)
+#define SNTP_L4_CONNECTED    NET_EVENT_L4_IPV6_CONNECTED
+#define SNTP_L4_DISCONNECTED NET_EVENT_L4_IPV6_DISCONNECTED
+#else
+#define SNTP_L4_CONNECTED    NET_EVENT_L4_CONNECTED
+#define SNTP_L4_DISCONNECTED NET_EVENT_L4_DISCONNECTED
+#endif
+
 static void l4_event_handler(uint64_t mgmt_event, struct net_if *iface, void *info,
 			     size_t info_length, void *user_data)
 {
@@ -362,14 +376,14 @@ static void l4_event_handler(uint64_t mgmt_event, struct net_if *iface, void *in
 	ARG_UNUSED(info_length);
 	ARG_UNUSED(user_data);
 
-	if (mgmt_event == NET_EVENT_L4_CONNECTED) {
+	if (mgmt_event == SNTP_L4_CONNECTED) {
 		k_work_reschedule(&sntp_resync_work_handle, K_NO_WAIT);
-	} else if (mgmt_event == NET_EVENT_L4_DISCONNECTED) {
+	} else if (mgmt_event == SNTP_L4_DISCONNECTED) {
 		k_work_cancel_delayable(&sntp_resync_work_handle);
 	}
 }
 
 NET_MGMT_REGISTER_EVENT_HANDLER(sntp_init_event_handler,
-				NET_EVENT_L4_CONNECTED | NET_EVENT_L4_DISCONNECTED,
+				SNTP_L4_CONNECTED | SNTP_L4_DISCONNECTED,
 				&l4_event_handler, NULL);
-#endif /* CONFIG_LOG_BACKEND_NET_USE_CONNECTION_MANAGER */
+#endif /* CONFIG_NET_CONFIG_SNTP_INIT_USE_CONNECTION_MANAGER */

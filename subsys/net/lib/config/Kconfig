@@ -279,5 +279,37 @@ config NET_CONFIG_SNTP_INIT_USE_CONNECTION_MANAGER
 	  start and stop the SNTP client. This way an SNTP request is
 	  also sent everytime when the network connection is established.
 
+if NET_CONFIG_SNTP_INIT_USE_CONNECTION_MANAGER
+
+choice NET_CONFIG_SNTP_INIT_L4_EVENT
+	prompt "L4 event to trigger SNTP sync"
+	default NET_CONFIG_SNTP_INIT_L4_EVENT_ANY
+	help
+	  Select which L4 connectivity event triggers an SNTP sync.
+
+config NET_CONFIG_SNTP_INIT_L4_EVENT_IPV4
+	bool "IPv4"
+	depends on NET_IPV4
+	help
+	  Trigger SNTP sync on NET_EVENT_L4_IPV4_CONNECTED and stop on
+	  NET_EVENT_L4_IPV4_DISCONNECTED.
+
+config NET_CONFIG_SNTP_INIT_L4_EVENT_IPV6
+	bool "IPv6"
+	depends on NET_IPV6
+	help
+	  Trigger SNTP sync on NET_EVENT_L4_IPV6_CONNECTED and stop on
+	  NET_EVENT_L4_IPV6_DISCONNECTED.
+
+config NET_CONFIG_SNTP_INIT_L4_EVENT_ANY
+	bool "Any (IPv4 or IPv6)"
+	help
+	  Trigger SNTP sync on NET_EVENT_L4_CONNECTED and stop on
+	  NET_EVENT_L4_DISCONNECTED. Fires on whichever IP version connects first.
+
+endchoice
+
+endif # NET_CONFIG_SNTP_INIT_USE_CONNECTION_MANAGER
+
 endif # NET_CONFIG_SNTP_INIT_RESYNC
 endif # NET_CONFIG_CLOCK_SNTP_INIT
