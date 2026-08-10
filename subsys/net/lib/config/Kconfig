@@ -257,6 +257,16 @@ config NET_CONFIG_SNTP_INIT_RESYNC
 
 if NET_CONFIG_SNTP_INIT_RESYNC
 
+config NET_CONFIG_SNTP_INIT_SERVER_PORT
+	int "SNTP server port for periodic resync"
+	default 123
+	range 1 65535
+	help
+	  UDP port used for the periodic SNTP resync query (DNS-resolved or
+	  DHCPv4-provided server address). Standard SNTP is port 123 per
+	  RFC4330; override for test setups where binding 123 is not
+	  possible without elevated privileges.
+
 config NET_CONFIG_SNTP_INIT_RESYNC_INTERVAL
 	int "SNTP resync interval (sec)"
 	default 3600

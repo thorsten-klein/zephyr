@@ -126,7 +126,7 @@ end:
 }
 
 #ifdef CONFIG_NET_CONFIG_SNTP_INIT_RESYNC
-#define SNTP_SERVER_PORT 123
+#define SNTP_SERVER_PORT CONFIG_NET_CONFIG_SNTP_INIT_SERVER_PORT
 
 static void sntp_async_service_handler(struct net_socket_service_event *pev);
 NET_SOCKET_SERVICE_SYNC_DEFINE_STATIC(sntp_service_async, sntp_async_service_handler, 1);
