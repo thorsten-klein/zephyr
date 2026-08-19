@@ -3029,6 +3029,7 @@ exit:
 
 static int tls_wolfssl_set_session_cache_mode(struct tls_context *context)
 {
+#ifndef NO_SESSION_CACHE
 	if ((context->options.role == ZTLS_IS_SERVER) &&
 	    (0 == context->options.cache_enabled)) {
 		if (wolfSSL_CTX_set_session_cache_mode(context->ctx,
@@ -3036,6 +3037,7 @@ static int tls_wolfssl_set_session_cache_mode(struct tls_context *context)
 			return -EINVAL;
 		}
 	}
+#endif
 
 	return 0;
 }
