@@ -78,6 +78,29 @@ struct nxp_wifi_dev {
 
 int nxp_wifi_wlan_event_callback(enum wlan_event_reason reason, void *data);
 
+#ifdef CONFIG_NXP_WIFI_MANUAL_INIT
+/**
+ * @brief Load and initialize the NXP Wi-Fi firmware.
+ *
+ * Must be called before nxp_wifi_wlan_start() when
+ * CONFIG_NXP_WIFI_MANUAL_INIT=y.
+ *
+ * @return 0 on success, negative errno on failure.
+ */
+int nxp_wifi_wlan_init(void);
+
+/**
+ * @brief Start the NXP Wi-Fi firmware and register the event callback.
+ *
+ * Must be called after nxp_wifi_wlan_init() when
+ * CONFIG_NXP_WIFI_MANUAL_INIT=y.
+ *
+ * @return 0 on success, negative errno on failure.
+ */
+int nxp_wifi_wlan_start(void);
+#endif /* CONFIG_NXP_WIFI_MANUAL_INIT */
+
+
 #if defined(CONFIG_NXP_WIFI_SHELL)
 void nxp_wifi_shell_register(struct nxp_wifi_dev *dev);
 #else

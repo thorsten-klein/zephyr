@@ -49,9 +49,10 @@ config NXP_WIFI_CUSTOM
 
 config NXP_WIFI_AUTO_INIT
 	bool "Auto initialize NXP Wi-Fi"
-	default y
+	default y if !NXP_WIFI_MANUAL_INIT
+	default n
 	help
-	  Automatically initialize NXP Wi-Fi driver and FW.
+	  Automatically disabled when NXP_WIFI_MANUAL_INIT is selected.
 
 choice NXP_WIFI_PART
 	prompt "Select NXP Wi-Fi part"
@@ -413,6 +414,21 @@ config NXP_WIFI_SHELL
 	default y if SHELL
 	help
 	  NXP Wi-Fi shell commands support.
+
+config NXP_WIFI_MANUAL_INIT
+	bool "Manual Wi-Fi initialization via shell"
+	default n
+	depends on NXP_WIFI_SHELL
+	help
+	  When enabled, the Wi-Fi firmware is NOT loaded at boot time.
+	  The application must run the 'wifi_init' shell command to load
+	  the firmware and start the driver. This enables three use cases:
+	    1. Delayed init  - load firmware only when Wi-Fi is needed.
+	    2. Runtime on/off - enable/disable Wi-Fi without rebooting.
+	    3. Recovery - re-initialize the driver when it enters a bad state.
+	  Note: depends on NXP_WIFI_SHELL since the init command is
+	  registered there.
+
 
 menu "Wi-Fi driver Stack configurations"
 

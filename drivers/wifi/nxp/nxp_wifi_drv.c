@@ -476,7 +476,11 @@ static int nxp_wifi_cpu_reset(uint8_t enable)
 	return err;
 }
 
+#ifndef CONFIG_NXP_WIFI_AUTO_INIT
+int nxp_wifi_wlan_init(void)
+#else
 static int nxp_wifi_wlan_init(void)
+#endif
 {
 	int status = NXP_WIFI_RET_SUCCESS;
 	int ret;
@@ -509,7 +513,11 @@ static int nxp_wifi_wlan_init(void)
 	return 0;
 }
 
+#ifndef CONFIG_NXP_WIFI_AUTO_INIT
+int nxp_wifi_wlan_start(void)
+#else
 static int nxp_wifi_wlan_start(void)
+#endif
 {
 	int status = NXP_WIFI_RET_SUCCESS;
 	int ret;
@@ -1976,12 +1984,22 @@ static void nxp_wifi_sta_init(struct net_if *iface)
 #endif
 #endif
 	g_mlan.state.interface = WLAN_BSS_TYPE_STA;
+#ifndef CONFIG_NXP_WIFI_AUTO_INIT
+	/*
+	 * Manual init: block net_if_post_init() from calling net_if_up()
+	 * on this interface before the MAC address is set.
+	 * cmd_nxp_wifi_init() clears this flag and calls net_if_up()
+	 * explicitly after nxp_wifi_wlan_start() has set the MAC.
+	 */
+	net_if_flag_set(iface, NET_IF_NO_AUTO_START);
+#endif
 
 #ifndef CONFIG_NXP_WIFI_SOFTAP_SUPPORT
 	int ret;
 
 	if (s_nxp_wifi_State == NXP_WIFI_NOT_INITIALIZED) {
-		/* Initialize the wifi subsystem */
+#ifdef CONFIG_NXP_WIFI_AUTO_INIT
+		/* Initialize the wifi subsystem automatically at boot */
 		ret = nxp_wifi_wlan_init();
 		if (ret) {
 			LOG_ERR("wlan initialization failed");
@@ -1992,8 +2010,12 @@ static void nxp_wifi_sta_init(struct net_if *iface)
 			LOG_ERR("wlan start failed");
 			return;
 		}
+#else
+		LOG_INF("NXP Wi-Fi manual init: FW not loaded at boot. "
+			"Run 'wifi_init' to start.");
+#endif /* CONFIG_NXP_WIFI_AUTO_INIT */
 	}
-#endif
+#endif /* CONFIG_NXP_WIFI_SOFTAP_SUPPORT */
 }
 
 #ifdef CONFIG_NXP_WIFI_SOFTAP_SUPPORT
@@ -2003,7 +2025,6 @@ static void nxp_wifi_uap_init(struct net_if *iface)
 	const struct device *dev = net_if_get_device(iface);
 	struct ethernet_context *eth_ctx = net_if_l2_data(iface);
 	struct interface *intf = dev->data;
-	int ret;
 
 	eth_ctx->eth_if_type = L2_ETH_IF_TYPE_WIFI;
 	intf->netif = iface;
@@ -2020,6 +2041,8 @@ static void nxp_wifi_uap_init(struct net_if *iface)
 	g_uap.state.interface = WLAN_BSS_TYPE_UAP;
 
 	if (s_nxp_wifi_State == NXP_WIFI_NOT_INITIALIZED) {
+#ifdef CONFIG_NXP_WIFI_AUTO_INIT
+	    int ret;
 		/* Initialize the wifi subsystem */
 		ret = nxp_wifi_wlan_init();
 		if (ret) {
@@ -2031,6 +2054,15 @@ static void nxp_wifi_uap_init(struct net_if *iface)
 			LOG_ERR("wlan start failed");
 			return;
 		}
+#else
+		/*
+		 * Manual init: block net_if_post_init() from calling
+		 * net_if_up() on this interface before the MAC address
+		 * is set. cmd_nxp_wifi_init() will call net_if_up()
+		 * explicitly after nxp_wifi_wlan_start() sets the MAC.
+		 */
+		net_if_flag_set(iface, NET_IF_NO_AUTO_START);
+#endif /* CONFIG_NXP_WIFI_AUTO_INIT */
 	}
 }
 
