@@ -17,6 +17,79 @@ bool net_socket_is_tls(void *obj);
 #define net_socket_is_tls(obj) false
 #endif
 
+/* Re-run ZFD_IOCTL_POLL_PREPARE for every pollfd.
+ *
+ * A POLL_UPDATE pass that asks for a retry (-EAGAIN) leaves the descriptors in
+ * their post-update state, and for some backends that state is torn down
+ * rather than merely inspected: the native offloaded sockets driver, for
+ * example, deregisters the socket from the host poller, disarms its callback
+ * and leaves its k_poll_signal raised - only POLL_PREPARE re-initialises those.
+ * Retrying with just k_poll() would then spin on the stale signal and observe
+ * no data, making poll() report a spurious timeout while its deadline is still
+ * far away.
+ *
+ * Re-preparing is safe for every backend: POLL_UPDATE has already run for all
+ * descriptors, so registering backends are unregistered at this point (no
+ * double registration), and declarative backends simply rewrite their
+ * k_poll_event slot.
+ *
+ * Returns 0 on success, or a positive errno value on failure. May move the
+ * deadline to "now" if a backend reports readiness via -EALREADY.
+ */
+static int zvfs_poll_rearm(struct zvfs_pollfd *fds, int nfds,
+			   struct k_poll_event *poll_events,
+			   struct k_poll_event *pev_end,
+			   struct k_poll_event **pev_out,
+			   k_timepoint_t *end)
+{
+	struct k_poll_event *pev = poll_events;
+	const struct fd_op_vtable *vtable;
+	struct zvfs_pollfd *pfd;
+	struct k_mutex *lock;
+	int i;
+
+	for (pfd = fds, i = nfds; i--; pfd++) {
+		void *ctx;
+		int result;
+
+		/* Per POSIX, negative fd's are just ignored */
+		if (pfd->fd < 0) {
+			continue;
+		}
+
+		ctx = zvfs_get_fd_obj_and_vtable(pfd->fd, &vtable, &lock);
+		if (ctx == NULL) {
+			/* Will set POLLNVAL in return loop */
+			continue;
+		}
+
+		(void)k_mutex_lock(lock, K_FOREVER);
+
+		result = zvfs_fdtable_call_ioctl(vtable, ctx, ZFD_IOCTL_POLL_PREPARE, pfd, &pev,
+						 pev_end);
+		if (result == -EALREADY) {
+			/* Backend already has something to report - do not wait. */
+			*end = sys_timepoint_calc(K_NO_WAIT);
+			result = 0;
+		} else if (result == -EXDEV) {
+			/* Offloaded sockets are handled before the retry loop
+			 * is ever reached; nothing to do here.
+			 */
+			result = 0;
+		}
+
+		k_mutex_unlock(lock);
+
+		if (result < 0) {
+			return -result;
+		}
+	}
+
+	*pev_out = pev;
+
+	return 0;
+}
+
 int zvfs_poll_internal(struct zvfs_pollfd *fds, int nfds, k_timeout_t timeout)
 {
 	bool retry;
@@ -154,6 +227,8 @@ int zvfs_poll_internal(struct zvfs_pollfd *fds, int nfds, k_timeout_t timeout)
 		}
 
 		if (retry) {
+			int result;
+
 			if (ret > 0) {
 				break;
 			}
@@ -163,6 +238,18 @@ int zvfs_poll_internal(struct zvfs_pollfd *fds, int nfds, k_timeout_t timeout)
 			if (K_TIMEOUT_EQ(timeout, K_NO_WAIT)) {
 				break;
 			}
+
+			/* Re-arm the descriptors before waiting again. The
+			 * POLL_UPDATE pass above may have torn down backend
+			 * state that only POLL_PREPARE can restore.
+			 */
+			result = zvfs_poll_rearm(fds, nfds, poll_events, pev_end, &pev, &end);
+			if (result != 0) {
+				errno = result;
+				return -1;
+			}
+
+			timeout = sys_timepoint_timeout(end);
 		}
 	} while (retry);
 

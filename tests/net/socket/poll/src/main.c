@@ -248,4 +248,219 @@ ZTEST(net_socket_poll, test_pollout_tcp)
 	zassert_equal(res, 0, "close failed");
 }
 
+/* Emulation of a "registering" poll backend.
+ *
+ * Such a backend arms real state in POLL_PREPARE and tears it down again in
+ * POLL_UPDATE - the native offloaded sockets driver, for instance, registers
+ * the socket with the host poller, initialises a k_poll_signal and arms a
+ * callback in POLL_PREPARE, then deregisters and disarms all of it in
+ * POLL_UPDATE. Only POLL_PREPARE can restore that state; in particular
+ * k_poll_signal_init() is the sole thing that clears a previous raise.
+ *
+ * The backends built into the native network stack are purely declarative
+ * (POLL_PREPARE only fills in a k_poll_event slot, POLL_UPDATE only inspects
+ * it), so they cannot exercise this path - hence the behaviour is modelled
+ * here directly.
+ */
+struct poll_retry_backend {
+	struct k_poll_signal signal;
+	bool armed;
+	bool raise_on_arm;
+	bool raise_once;
+	int eagain_rounds;
+	int prepare_count;
+	int update_count;
+};
+
+static int poll_retry_ioctl(void *obj, unsigned int request, va_list args)
+{
+	struct poll_retry_backend *backend = obj;
+	struct k_poll_event **pev;
+	struct zsock_pollfd *pfd;
+
+	switch (request) {
+	case ZFD_IOCTL_POLL_PREPARE: {
+		struct k_poll_event *pev_end;
+
+		pfd = va_arg(args, struct zsock_pollfd *);
+		pev = va_arg(args, struct k_poll_event **);
+		pev_end = va_arg(args, struct k_poll_event *);
+
+		if (!(pfd->events & ZSOCK_POLLIN)) {
+			return 0;
+		}
+
+		if (*pev == pev_end) {
+			return -ENOMEM;
+		}
+
+		backend->prepare_count++;
+
+		/* Re-initialising the signal is what clears an earlier raise. */
+		k_poll_signal_init(&backend->signal);
+		k_poll_event_init(*pev, K_POLL_TYPE_SIGNAL, K_POLL_MODE_NOTIFY_ONLY,
+				  &backend->signal);
+		(*pev)++;
+		backend->armed = true;
+
+		if (backend->raise_on_arm) {
+			if (backend->raise_once) {
+				backend->raise_on_arm = false;
+			}
+
+			k_poll_signal_raise(&backend->signal, ZSOCK_POLLIN);
+		}
+
+		return 0;
+	}
+	case ZFD_IOCTL_POLL_UPDATE: {
+		unsigned int signaled = 0;
+		int flags = 0;
+
+		pfd = va_arg(args, struct zsock_pollfd *);
+		pev = va_arg(args, struct k_poll_event **);
+
+		if (!(pfd->events & ZSOCK_POLLIN)) {
+			return 0;
+		}
+
+		(*pev)++;
+		backend->update_count++;
+
+		if (!backend->armed) {
+			/* Torn down by an earlier POLL_UPDATE and never
+			 * re-prepared, so nothing can be reported.
+			 */
+			return 0;
+		}
+
+		/* Tear the registration down, deliberately leaving any raise
+		 * on the signal in place.
+		 */
+		backend->armed = false;
+
+		k_poll_signal_check(&backend->signal, &signaled, &flags);
+
+		if (backend->eagain_rounds > 0) {
+			backend->eagain_rounds--;
+			/* Input was consumed but produced nothing for the
+			 * caller (e.g. the TLS layer decrypting a
+			 * post-handshake record) - ask poll() to keep waiting.
+			 */
+			return -EAGAIN;
+		}
+
+		if (signaled) {
+			pfd->revents |= ZSOCK_POLLIN;
+		}
+
+		return 0;
+	}
+	default:
+		errno = EOPNOTSUPP;
+		return -1;
+	}
+}
+
+static int poll_retry_close(void *obj)
+{
+	ARG_UNUSED(obj);
+
+	return 0;
+}
+
+static const struct fd_op_vtable poll_retry_vtable = {
+	.close = poll_retry_close,
+	.ioctl = poll_retry_ioctl,
+};
+
+static int poll_retry_open(struct poll_retry_backend *backend)
+{
+	int fd = zvfs_reserve_fd();
+
+	zassert_true(fd >= 0, "no free fd");
+	zvfs_finalize_fd(fd, backend, &poll_retry_vtable);
+
+	return fd;
+}
+
+/* A POLL_UPDATE returning -EAGAIN means "I consumed something, but it produced
+ * nothing for the caller - keep waiting". poll() must honour the remaining
+ * timeout instead of reporting a spurious timeout straight away.
+ *
+ * Without re-arming, the backend's stale raised signal makes the next k_poll()
+ * return immediately, the torn-down backend reports nothing, and poll() would
+ * return 0 within microseconds of a 100 ms deadline.
+ */
+ZTEST(net_socket_poll, test_poll_update_retry_waits_for_timeout)
+{
+	struct poll_retry_backend backend = {
+		.raise_on_arm = true,
+		.raise_once = true,
+		.eagain_rounds = 1,
+	};
+	struct zsock_pollfd pollfds[1];
+	uint32_t tstamp;
+	int fd;
+	int res;
+
+	fd = poll_retry_open(&backend);
+
+	memset(pollfds, 0, sizeof(pollfds));
+	pollfds[0].fd = fd;
+	pollfds[0].events = ZSOCK_POLLIN;
+
+	tstamp = k_uptime_get_32();
+	res = zsock_poll(pollfds, ARRAY_SIZE(pollfds), 100);
+	tstamp = k_uptime_get_32() - tstamp;
+
+	/* The only event was consumed by the retry and nothing else arrived,
+	 * so poll() has to block for the full timeout before reporting 0.
+	 */
+	zassert_equal(res, 0);
+	zassert_equal(pollfds[0].revents, 0);
+	zassert_true(tstamp >= 100U, "poll() returned after %u ms, expected >= 100",
+		     tstamp);
+
+	/* The retry has to go through POLL_PREPARE again. */
+	zassert_true(backend.prepare_count >= 2, "prepare_count %d",
+		     backend.prepare_count);
+
+	res = zvfs_close(fd);
+	zassert_equal(res, 0, "close failed");
+}
+
+/* After a -EAGAIN retry, poll() must re-arm the descriptor so that a backend
+ * which tears its state down in POLL_UPDATE can still deliver a later event.
+ * Without the re-arm the backend stays disarmed and the event is lost, making
+ * poll() report a timeout despite the data being available.
+ */
+ZTEST(net_socket_poll, test_poll_update_retry_rearms_backend)
+{
+	struct poll_retry_backend backend = {
+		.raise_on_arm = true,
+		.raise_once = false,
+		.eagain_rounds = 1,
+	};
+	struct zsock_pollfd pollfds[1];
+	int fd;
+	int res;
+
+	fd = poll_retry_open(&backend);
+
+	memset(pollfds, 0, sizeof(pollfds));
+	pollfds[0].fd = fd;
+	pollfds[0].events = ZSOCK_POLLIN;
+
+	res = zsock_poll(pollfds, ARRAY_SIZE(pollfds), 100);
+
+	zassert_equal(res, 1);
+	zassert_equal(pollfds[0].revents, ZSOCK_POLLIN);
+	zassert_true(backend.prepare_count >= 2, "prepare_count %d",
+		     backend.prepare_count);
+
+	res = zvfs_close(fd);
+	zassert_equal(res, 0, "close failed");
+}
+
 ZTEST_SUITE(net_socket_poll, NULL, NULL, NULL, NULL, NULL);
