@@ -95,6 +95,19 @@ static int websocket_context_unref(struct websocket_context *ctx)
 {
 	int old_rc = atomic_dec(&ctx->refcount);
 
+	if (old_rc <= 0) {
+		/* Already released - can happen when a caller closes the websocket fd
+		 * after websocket_recv_msg() already auto-disconnected (and unreffed)
+		 * the same context while processing a peer-initiated CLOSE frame.
+		 * Clamp at 0 instead of letting refcount go negative: atomic_dec() has
+		 * no floor, and websocket_context_is_used() is `!!refcount`, so a
+		 * negative value would report this context as permanently in use and
+		 * leak its slot (and real_sock fd) for the lifetime of the device.
+		 */
+		atomic_set(&ctx->refcount, 0);
+		return 0;
+	}
+
 	if (old_rc != 1) {
 		return old_rc - 1;
 	}
