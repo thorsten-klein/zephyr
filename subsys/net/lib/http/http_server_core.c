@@ -56,6 +56,9 @@ struct http_server_ctx {
 	 */
 	struct zsock_pollfd fds[HTTP_SERVER_SOCK_COUNT];
 	struct http_client_ctx clients[HTTP_SERVER_MAX_CLIENTS];
+#if defined(CONFIG_HTTP_SERVER_CALLBACKS)
+	const struct http_server_cb* callbacks;
+#endif
 };
 
 static struct http_server_ctx server_ctx;
@@ -1052,6 +1055,22 @@ void populate_request_ctx(struct http_request_ctx *req_ctx, uint8_t *data, size_
 	}
 }
 
+#if defined(CONFIG_HTTP_SERVER_CALLBACKS)
+int http_server_cb_register(const struct http_server_cb* cb)
+{
+	if (!cb) {
+		return -EINVAL;
+	}
+
+	if (server_ctx.callbacks) {
+		return -EEXIST;
+	}
+
+	server_ctx.callbacks = cb;
+	return 0;
+}
+#endif
+
 int http_server_start(void)
 {
 	if (server_running) {
@@ -1098,13 +1117,35 @@ static void http_server_thread(void *p1, void *p2, void *p3)
 			ret = http_server_init(&server_ctx);
 			if (ret < 0) {
 				LOG_ERR("Failed to initialize HTTP2 server");
+#if defined(CONFIG_HTTP_SERVER_CALLBACKS)
+				if (server_ctx.callbacks && server_ctx.callbacks->failed) {
+					server_ctx.callbacks->failed(ret);
+				}
+#endif
 				goto again;
 			}
 
+#if defined(CONFIG_HTTP_SERVER_CALLBACKS)
+			if (server_ctx.callbacks && server_ctx.callbacks->started) {
+				server_ctx.callbacks->started();
+			}
+#endif
+
 			ret = http_server_run(&server_ctx);
 			if (!server_running) {
+#if defined(CONFIG_HTTP_SERVER_CALLBACKS)
+				if (server_ctx.callbacks && server_ctx.callbacks->stopped) {
+					server_ctx.callbacks->stopped(0);
+				}
+#endif
 				continue;
 			}
+
+#if defined(CONFIG_HTTP_SERVER_CALLBACKS)
+			if (server_ctx.callbacks && server_ctx.callbacks->stopped) {
+				server_ctx.callbacks->stopped(ret);
+			}
+#endif
 
 again:
 			LOG_INF("Re-starting server (%d)", ret);

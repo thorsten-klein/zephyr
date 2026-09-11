@@ -535,6 +535,49 @@ struct http_client_ctx {
 		.name = _id##_str,                                                                 \
 	}
 
+#if defined(CONFIG_HTTP_SERVER_CALLBACKS)
+
+/** @brief HTTP server callback structure.
+ *
+ *  This structure is used for tracking the state of a HTTP server.
+ *  It is registered with the help of the http_server_cb_register() API.
+ *  If a callback is not of interest, it may be set to NULL.
+ */
+struct http_server_cb {
+	/**
+	 * This callback notifies that HTTP server started successfully.
+	 */
+	void (*started)(void);
+
+	/**
+	 * This callback notifies that HTTP server failed to start.
+	 *
+	 * @param err Negative error code.
+	 */
+	void (*failed)(int err);
+
+	/**
+	 * This callback notifies that HTTP server was stopped or terminated unexpectedly.
+	 *
+	 * @param err 0 on success or negative error code on error.
+	 */
+	void (*stopped)(int err);
+};
+
+/** @brief Register HTTP server callbacks.
+ *
+ *  Register callbacks to monitor the state of HTTP server.
+ *
+ *  @param cb Callback struct. Must point to memory that remains valid.
+ *
+ * @retval 0 Success.
+ * @retval -EINVAL if @p cb is NULL.
+ * @retval -EEXIST if @p cb was already registered.
+ */
+int http_server_cb_register(const struct http_server_cb* cb);
+
+#endif
+
 /** @brief Start the HTTP2 server.
  *
  * The server runs in a background thread. Once started, the server will create

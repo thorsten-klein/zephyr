@@ -263,6 +263,12 @@ config HTTP_SERVER_COMPLETE_STATUS_PHRASES
 	  HTTP specification and their absence does not affect protocol
 	  compliance or client behavior.
 
+config HTTP_SERVER_CALLBACKS
+	bool "Enable HTTP server started/failed/stopped callbacks"
+	help
+	  Allow user to specify callbacks when server succeded or failed to start
+	  or terminated unexpectedly. Callbacks are executed from server thread.
+
 endif
 
 # Hidden option to avoid having multiple individual options that are ORed together
