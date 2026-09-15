@@ -61,11 +61,9 @@ static int timespec_to_rtc_time(const struct timespec *in, struct rtc_time *out)
 
 	return 0;
 }
-#endif /* CONFIG_NET_CONFIG_CLOCK_SNTP_SET_RTC */
 
-static void sntp_set_rtc(__maybe_unused const struct timespec *tspec)
+static void sntp_set_rtc(const struct timespec *tspec)
 {
-#ifdef CONFIG_NET_CONFIG_CLOCK_SNTP_SET_RTC
 	const struct device *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_rtc));
 	struct rtc_time rtctime;
 	int res;
@@ -83,8 +81,13 @@ static void sntp_set_rtc(__maybe_unused const struct timespec *tspec)
 	if (res != 0) {
 		LOG_ERR("Set RTC failed: %d", res);
 	}
-#endif
 }
+#else
+static void sntp_set_rtc(const struct timespec *tspec)
+{
+	ARG_UNUSED(tspec);
+}
+#endif
 
 static int sntp_set_clocks(struct sntp_time *ts)
 {
