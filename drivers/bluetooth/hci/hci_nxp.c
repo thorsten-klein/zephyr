@@ -409,7 +409,19 @@ static struct net_buf *bt_acl_recv(uint8_t *data, size_t len)
 		LOG_ERR("ACL header is missing");
 		return NULL;
 	}
-	memcpy((void *)&payload_len, (void *)&data[2], 2);
+	/* data may not be 2-byte aligned: PLATFORM_HciImumcRxCallback() (fwk_platform_ble.c)
+	 * always forwards &data[1] to strip the H4 packet-type byte, which shifts the parity of
+	 * every ACL payload by one byte relative to the original (aligned) IMU RX buffer, so this
+	 * header is *always* misaligned by construction, not just occasionally.
+	 * A plain byte-OR-shift/sys_get_le16() read is semantically a 16-bit little-endian load,
+	 * and the compiler is free to (and does) recognize that pattern and fold it back into a
+	 * single aligned load instruction (e.g. ldrh on Cortex-M), which then faults with a USAGE
+	 * FAULT / unaligned memory access. Reading through volatile bytes forbids the compiler
+	 * from combining the two loads into one, forcing genuine byte-at-a-time access.
+	 */
+	const volatile uint8_t *unalignedData = data;
+
+	payload_len = (uint16_t)unalignedData[2] | ((uint16_t)unalignedData[3] << 8);
 	if ((len - BT_HCI_ACL_HDR_SIZE) != payload_len) {
 		LOG_ERR("ACL payload length is incorrect");
 		return NULL;
