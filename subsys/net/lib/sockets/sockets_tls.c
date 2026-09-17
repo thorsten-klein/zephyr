@@ -3981,16 +3981,43 @@ static int tls_check_cert(struct tls_credential *cert)
 	 * actual handshake.
 	 */
 	if (!crt_is_pem(cert->buf, cert->len)) {
-		DecodedCert dc;
-		int ret;
+		/* A public-cert credential may be a chain of concatenated DER
+		 * certs (leaf + intermediate(s)) - wolfSSL_CTX_use_certificate_
+		 * chain_buffer_format() accepts that at handshake time. ParseCert()
+		 * only decodes a single DER object, so walk the buffer one
+		 * SEQUENCE at a time and validate each cert individually; a
+		 * one-shot ParseCert() over the whole buffer would fail on the
+		 * trailing bytes of the second cert.
+		 */
+		const uint8_t *buf = cert->buf;
+		word32 remaining = (word32)cert->len;
 
-		InitDecodedCert(&dc, cert->buf, (word32)cert->len, NULL);
-		ret = ParseCert(&dc, CERT_TYPE, NO_VERIFY, NULL);
-		FreeDecodedCert(&dc);
-		if (ret < 0) {
-			NET_ERR("Failed to parse %s on tag %d",
-				"certificate", cert->tag);
-			return -EINVAL;
+		while (remaining > 0) {
+			word32 idx = 0;
+			int certLen;
+			DecodedCert dc;
+			int ret;
+
+			if (GetSequence(buf, &idx, &certLen, remaining) < 0 ||
+			    certLen < 0 || (word32)(idx + (word32)certLen) > remaining) {
+				NET_ERR("Failed to parse %s on tag %d",
+					"certificate", cert->tag);
+				return -EINVAL;
+			}
+
+			certLen += idx;
+
+			InitDecodedCert(&dc, buf, (word32)certLen, NULL);
+			ret = ParseCert(&dc, CERT_TYPE, NO_VERIFY, NULL);
+			FreeDecodedCert(&dc);
+			if (ret < 0) {
+				NET_ERR("Failed to parse %s on tag %d",
+					"certificate", cert->tag);
+				return -EINVAL;
+			}
+
+			buf += certLen;
+			remaining -= (word32)certLen;
 		}
 	}
 	return 0;
