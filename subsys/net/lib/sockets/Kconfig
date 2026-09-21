@@ -228,10 +228,27 @@ config NET_SOCKETS_TLS_SET_MAX_FRAGMENT_LENGTH
 	  NET_SOCKETS_DTLS_MAX_FRAGMENT_LENGTH.
 
 	  For WolfSSL, Maximum Fragment Length (MFL) value is set by the
-	  configuration option WOLFSSL_MAX_FRAGMENT_LEN.
+	  configuration option NET_SOCKETS_TLS_WOLFSSL_MAX_FRAGMENT_LENGTH.
 
 	  This is mostly useful for TLS client side to tell TLS server what is
 	  the maximum supported receive record length.
+
+config NET_SOCKETS_TLS_WOLFSSL_MAX_FRAGMENT_LENGTH
+	int "Maximum TLS fragment size in bytes (wolfSSL)"
+	default 2048
+	range 512 8192
+	depends on WOLFSSL
+	depends on NET_SOCKETS_TLS_SET_MAX_FRAGMENT_LENGTH
+	help
+	  Maximum Fragment Length (MFL) in bytes advertised to the peer via the
+	  RFC 6066 max_fragment_length extension on wolfSSL TLS sockets. The
+	  value is rounded down to the nearest length the extension can encode
+	  (512, 1024, 2048, 4096, and wolfSSL's non-RFC 8192).
+
+	  It bounds the size of the record buffers wolfSSL allocates while
+	  receiving, so it must stay within whatever allocator wolfSSL was
+	  configured with - notably a WOLFSSL_STATIC_MEMORY pool, whose largest
+	  bucket a full-size 16 KiB record does not fit into.
 
 config NET_SOCKETS_ENABLE_DTLS
 	bool "DTLS socket support"

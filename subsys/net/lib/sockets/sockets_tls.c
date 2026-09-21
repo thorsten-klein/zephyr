@@ -3741,6 +3741,30 @@ static int tls_wolfssl_handshake(struct tls_context *context,
 	return ret;
 }
 
+#if defined(HAVE_MAX_FRAGMENT) && defined(CONFIG_NET_SOCKETS_TLS_SET_MAX_FRAGMENT_LENGTH)
+/* Translate CONFIG_NET_SOCKETS_TLS_WOLFSSL_MAX_FRAGMENT_LENGTH (bytes) into the
+ * WOLFSSL_MFL_* code wolfSSL_CTX_UseMaxFragment() expects, rounding down to the
+ * nearest encodable length. 8192 is wolfSSL's own extension to RFC 6066, which
+ * only defines 512..4096.
+ */
+static unsigned char tls_wolfssl_mfl_code(void)
+{
+	size_t len = CONFIG_NET_SOCKETS_TLS_WOLFSSL_MAX_FRAGMENT_LENGTH;
+
+	if (len >= 8192) {
+		return WOLFSSL_MFL_2_13;
+	} else if (len >= 4096) {
+		return WOLFSSL_MFL_2_12;
+	} else if (len >= 2048) {
+		return WOLFSSL_MFL_2_11;
+	} else if (len >= 1024) {
+		return WOLFSSL_MFL_2_10;
+	}
+
+	return WOLFSSL_MFL_2_9;
+}
+#endif /* HAVE_MAX_FRAGMENT && CONFIG_NET_SOCKETS_TLS_SET_MAX_FRAGMENT_LENGTH */
+
 static WOLFSSL_METHOD *tls_wolfssl_get_method(struct tls_context *context,
 					      bool is_server)
 {
@@ -3833,13 +3857,13 @@ static int tls_wolfssl_init(struct tls_context *context, bool is_server)
 	}
 #endif /* !NO_PSK */
 
-#if defined(CONFIG_WOLFSSL_MAX_FRAGMENT_LEN)
+#if defined(HAVE_MAX_FRAGMENT) && defined(CONFIG_NET_SOCKETS_TLS_SET_MAX_FRAGMENT_LENGTH)
 	if (wolfSSL_CTX_UseMaxFragment(context->ctx,
-				       CONFIG_WOLFSSL_MAX_FRAGMENT_LEN) != WOLFSSL_SUCCESS) {
+				       tls_wolfssl_mfl_code()) != WOLFSSL_SUCCESS) {
 		ret = -EINVAL;
 		goto err_cleanup;
 	}
-#endif /* CONFIG_WOLFSSL_MAX_FRAGMENT_LEN */
+#endif /* HAVE_MAX_FRAGMENT && CONFIG_NET_SOCKETS_TLS_SET_MAX_FRAGMENT_LENGTH */
 
 	ret = tls_wolfssl_set_session_cache_mode(context);
 	if (ret != 0) {
