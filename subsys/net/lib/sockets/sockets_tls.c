@@ -2426,6 +2426,34 @@ static int tls_set_psk(struct tls_context *tls,
 	return -ENOTSUP;
 }
 
+static int tls_set_private_key_id(struct tls_context *tls,
+				  struct tls_credential *priv_key)
+{
+#if defined(CONFIG_WOLFSSL) && defined(WOLF_PRIVATE_KEY_ID)
+	int ret;
+
+	/* Bind only the private key to the crypto device. Setting the device
+	 * on the CTX (wolfSSL_CTX_SetDevId()) would also route the session's
+	 * record cipher, hashes, HMAC and ECDHE through it.
+	 */
+	ret = wolfSSL_CTX_use_PrivateKey_Id(tls->ctx, priv_key->buf, priv_key->len,
+					    CONFIG_NET_SOCKETS_TLS_WOLFSSL_KEY_DEVID);
+	if (ret != WOLFSSL_SUCCESS) {
+		NET_ERR("Failed to set the private key reference");
+		return -EINVAL;
+	}
+
+	return 0;
+#else
+	ARG_UNUSED(tls);
+	ARG_UNUSED(priv_key);
+
+	NET_ERR("Hardware-held private keys need wolfSSL built with WOLF_PRIVATE_KEY_ID.");
+
+	return -ENOTSUP;
+#endif /* CONFIG_WOLFSSL && WOLF_PRIVATE_KEY_ID */
+}
+
 static int tls_set_credential(struct tls_context *tls,
 			      struct tls_credential *cred)
 {
@@ -2438,6 +2466,10 @@ static int tls_set_credential(struct tls_context *tls,
 
 	case TLS_CREDENTIAL_PRIVATE_KEY:
 		return tls_set_private_key(tls, cred);
+	break;
+
+	case TLS_CREDENTIAL_PRIVATE_KEY_ID:
+		return tls_set_private_key_id(tls, cred);
 	break;
 
 	case TLS_CREDENTIAL_PSK:
@@ -4093,6 +4125,14 @@ static int tls_check_credentials(const sec_tag_t *sec_tags, int sec_tag_count)
 					goto exit;
 				}
 
+				break;
+			case TLS_CREDENTIAL_PRIVATE_KEY_ID:
+				/* Opaque to this layer: the buffer is a key
+				 * store reference, not a key, so there is
+				 * nothing to parse. Whether it names a usable
+				 * key is only known once the backend binds it
+				 * in tls_set_private_key_id().
+				 */
 				break;
 			case TLS_CREDENTIAL_PSK:
 				err = tls_check_psk(cred);

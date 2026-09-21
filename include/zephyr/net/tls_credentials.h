@@ -59,7 +59,17 @@ enum tls_credential_type {
 	/** Pre-shared key identity. Should be registered together with a
 	 *  corresponding PSK. Used with PSK-based ciphersuites.
 	 */
-	TLS_CREDENTIAL_PSK_ID
+	TLS_CREDENTIAL_PSK_ID,
+
+	/** An opaque reference to a private key held in a hardware key store,
+	 *  in place of the key itself. Register it exactly as you would a
+	 *  TLS_CREDENTIAL_PRIVATE_KEY, together with the matching public
+	 *  certificate; the buffer holds a backend-defined key identifier
+	 *  rather than DER or PEM, and the signing operation runs inside the
+	 *  key store. Only supported by the wolfSSL backend, and only when it
+	 *  is built with a crypto callback that recognises the identifier.
+	 */
+	TLS_CREDENTIAL_PRIVATE_KEY_ID
 };
 
 /** Secure tag, a reference to TLS credential

@@ -250,6 +250,19 @@ config NET_SOCKETS_TLS_WOLFSSL_MAX_FRAGMENT_LENGTH
 	  configured with - notably a WOLFSSL_STATIC_MEMORY pool, whose largest
 	  bucket a full-size 16 KiB record does not fit into.
 
+config NET_SOCKETS_TLS_WOLFSSL_KEY_DEVID
+	int "Crypto device ID backing TLS_CREDENTIAL_PRIVATE_KEY_ID"
+	default 1
+	depends on WOLFSSL
+	help
+	  wolfSSL device ID the socket layer binds a private key registered as
+	  TLS_CREDENTIAL_PRIVATE_KEY_ID to. Only that key uses the device; the
+	  rest of the session stays in software. It must match the
+	  ID the crypto callback that understands the key reference was
+	  registered under with wc_CryptoCb_RegisterDevice(); on NXP parts with
+	  an EdgeLock (ELS/PKC) that is WOLFSSL_ELS_PKC_DEVID. Unused unless a
+	  TLS_CREDENTIAL_PRIVATE_KEY_ID credential is actually registered.
+
 config NET_SOCKETS_ENABLE_DTLS
 	bool "DTLS socket support"
 	depends on NET_SOCKETS_SOCKOPT_TLS
