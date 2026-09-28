@@ -736,6 +736,16 @@ class Gtest(Harness):
             # Nothing finished, keep processing lines
             return
 
+        # A DISABLED test never gets a [ RUN ] line, so self.tc is None when
+        # the [ DISABLED ] line arrives.  Create the case and mark it skipped
+        # without requiring a matching running context.
+        if state == TwisterStatus.SKIP and self.tc is None:
+            tc = self.instance.get_case_or_create(name)
+            tc.status = TwisterStatus.SKIP
+            self.testcase_output = ""
+            self._match = False
+            return
+
         # Get the matching test and make sure it's the same as the current context
         tc = self.instance.get_case_by_name(name)
         assert (
