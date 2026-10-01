@@ -353,6 +353,8 @@ class Build(Forceable):
                 self.die(f"Test item {test_item} not found in {yf}")
             item = tests.get(test_item)
 
+            self._check_platform_filter(test_item, yf, [common, item], board)
+
             sysbuild = None
             extra_dtc_overlay_files = []
             extra_overlay_confs = []
@@ -439,6 +441,48 @@ class Build(Forceable):
             self.args.cmake_opts.extend(args_expanded)
 
         return found_test_metadata
+
+    @staticmethod
+    def _platform_matches(board, platform):
+        # Strip a board revision ("board@rev/soc" -> "board/soc") and compare
+        # either the fully qualified name or, if one side carries no
+        # qualifiers, only the board name.
+        def normalize(name):
+            base, _, quals = name.partition('/')
+            return base.split('@')[0], quals
+
+        b_base, b_quals = normalize(board)
+        p_base, p_quals = normalize(platform)
+        if b_base != p_base:
+            return False
+        return not b_quals or not p_quals or b_quals == p_quals
+
+    def _check_platform_filter(self, test_item, yf, sections, board):
+        if not board:
+            return
+        # Like twister, merge the lists of the 'common' and the test section.
+        filters = {'platform_allow': [], 'platform_exclude': []}
+        for section in sections:
+            if not section:
+                continue
+            for key, merged in filters.items():
+                value = section.get(key)
+                if isinstance(value, str):
+                    value = value.split()
+                if value:
+                    merged.extend(value)
+
+        platform_allow = filters['platform_allow']
+        platform_exclude = filters['platform_exclude']
+        if platform_allow:
+            self.check_force(
+                any(self._platform_matches(board, p) for p in platform_allow),
+                f'board {board} is not in platform_allow of test item '
+                f'{test_item} in {yf}: {", ".join(platform_allow)}')
+        self.check_force(
+            not any(self._platform_matches(board, p) for p in platform_exclude),
+            f'board {board} is in platform_exclude of test item '
+            f'{test_item} in {yf}: {", ".join(platform_exclude)}')
 
     def _sanity_precheck(self):
         app = self.args.source_dir
