@@ -50,6 +50,11 @@ if sys.platform == 'linux':
 
 from domains import Domains
 from twisterlib.coverage import run_coverage_instance
+from twisterlib.diff_filter import (
+    DEFAULT_FORCE_ALL_PATTERNS,
+    find_affecting_change,
+    get_diff_changes,
+)
 from twisterlib.environment import TwisterEnv
 from twisterlib.harness import Ctest, HarnessImporter, Pytest
 from twisterlib.log_helper import log_command
@@ -936,6 +941,14 @@ class ProjectBuilder(FilterBuilder):
     def trace(self) -> bool:
         return self.options.verbose > 2
 
+    def is_affected_by_diff(self) -> bool:
+        if self.env.diff_changes is None:
+            return True
+        reason = find_affecting_change(self.env.diff_changes, self.instance.testsuite.source_dir,
+                                       self.instance.build_dir, self.options.diff_extra_inputs)
+        logger.debug(f"{self.instance.name}: --diff-base: {reason or 'not affected'}")
+        return reason is not None
+
     def log_info(self, filename, inline_logs, log_testcases=False):
         filename = os.path.abspath(os.path.realpath(filename))
         if inline_logs:
@@ -1061,6 +1074,12 @@ class ProjectBuilder(FilterBuilder):
                         logger.debug(f"filtering {self.instance.name}")
                         self.instance.status = TwisterStatus.FILTER
                         self.instance.reason = "runtime filter"
+                        results.filtered_runtime_increment()
+                        self.instance.add_missing_case_status(TwisterStatus.FILTER)
+                        next_op = 'report'
+                    elif not self.is_affected_by_diff():
+                        self.instance.status = TwisterStatus.FILTER
+                        self.instance.reason = "not affected by --diff-base changes"
                         results.filtered_runtime_increment()
                         self.instance.add_missing_case_status(TwisterStatus.FILTER)
                         next_op = 'report'
@@ -1949,6 +1968,11 @@ class TwisterRunner:
             logger.info(f"JOBS: {self.jobs}")
 
         self.update_counting_before_pipeline()
+
+        # Determined once before the pipeline processes are forked
+        self.env.diff_changes = get_diff_changes(
+            self.options.diff_base, DEFAULT_FORCE_ALL_PATTERNS + self.options.diff_force_all
+        ) if self.options.diff_base else None
 
         while True:
             self.results.iteration_increment()
