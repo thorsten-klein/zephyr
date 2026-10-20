@@ -1932,8 +1932,6 @@ class TwisterRunner:
         # Set number of jobs
         if self.options.jobs:
             self.jobs = self.options.jobs
-        elif self.options.build_only:
-            self.jobs = mp.cpu_count() * 2
         else:
             self.jobs = mp.cpu_count()
 
