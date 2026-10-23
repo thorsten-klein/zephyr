@@ -438,6 +438,32 @@ modules will be the merged result of all sources.
    use other Zephyr modules provided by :ref:`west <west>`.
    This can for example be useful for special test purposes.
 
+Additional modules can be specified via ``userdata``, e.g. if a module is not a
+west project at the same time. For example, if a module is maintained in a
+sub-directory of a west project, or if it comes from a repository that is not
+managed by west. You can specify extra modules in the west manifest, under
+``self: userdata: zephyr-extra-modules:``:
+
+.. code-block:: yaml
+
+   manifest:
+     self:
+       path: my-app
+       userdata:
+         zephyr-extra-modules:
+           - modules/my_module
+
+Rules:
+
+- The build reads this list from the top-level manifest file and from all
+  manifest files it imports from active projects. So an imported project can
+  list its own extra modules.
+- A relative path starts at the root of the repository that contains the
+  manifest file.
+- If a module in :makevar:`EXTRA_ZEPHYR_MODULES` has the same name, it
+  replaces the module from the manifest.
+- If :makevar:`ZEPHYR_MODULES` is set, the build ignores this list.
+
 If you want to permanently add modules to the zephyr workspace and you are
 using zephyr as your manifest repository, you can also add a west manifest file
 into the :zephyr_file:`submanifests` directory. See

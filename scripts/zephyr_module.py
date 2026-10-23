@@ -751,13 +751,109 @@ def west_projects(manifest=None):
     return None
 
 
+def _west_import_files(repo, imp):
+    # Yield the manifest files referenced by a west 'import:' value,
+    # following west's rules for bool, file, directory, list and map imports.
+    if imp is True:
+        yield repo / 'west.yml'
+    elif isinstance(imp, str):
+        path = repo / imp
+        if path.is_dir():
+            yield from sorted(p for p in path.iterdir() if p.suffix == '.yml')
+        else:
+            yield path
+    elif isinstance(imp, list):
+        for sub_imp in imp:
+            yield from _west_import_files(repo, sub_imp)
+    elif isinstance(imp, dict):
+        yield from _west_import_files(repo, imp.get('file', 'west.yml'))
+
+
+def _userdata_extra_modules(userdata, repo, manifest_file):
+    # Return the 'zephyr-extra-modules:' entries of a manifest's
+    # self: userdata:, resolved against the repository declaring them.
+    if not isinstance(userdata, dict):
+        return []
+
+    entries = userdata.get('zephyr-extra-modules') or []
+    if not isinstance(entries, list) or \
+       not all(isinstance(e, str) and e for e in entries):
+        sys.exit(f'ERROR: self: userdata: zephyr-extra-modules: in '
+                 f'{manifest_file} must be a list of paths')
+
+    return [PurePosixPath((repo / os.path.expanduser(os.path.expandvars(e)))
+                          .resolve().as_posix())
+            for e in entries]
+
+
+def west_extra_modules(west_projs):
+    '''Collect extra Zephyr modules declared in the west manifest.
+
+    Extra modules are given in a manifest's
+    self: userdata: zephyr-extra-modules: list. The top-level manifest
+    and all manifests it imports from active projects are considered.
+    Relative paths are resolved against the repository containing the
+    declaring manifest file.
+
+    West drops the self: section of imported manifests, so this function
+    reads the imported manifest files itself. Once west provides
+    Project.self_userdata, use it instead.
+    '''
+    if not west_projs or not west_projs.get('projects'):
+        return []
+
+    projects = west_projs['projects']
+    active = {p.name: p for p in projects[1:]}
+    extra_modules = []
+    visited = set()
+    defined = set()
+
+    def collect(manifest_file, repo):
+        manifest_file = Path(manifest_file).resolve()
+        if manifest_file in visited or not manifest_file.is_file():
+            return
+        visited.add(manifest_file)
+
+        with open(manifest_file, encoding='utf-8') as f:
+            data = yaml.load(f, Loader=SafeLoader) or {}
+        data = data.get('manifest') or {}
+
+        slf = data.get('self') or {}
+        # Like west, resolve self imports before this file's projects.
+        if slf.get('import'):
+            for sub_file in _west_import_files(repo, slf['import']):
+                collect(sub_file, repo)
+        extra_modules.extend(_userdata_extra_modules(slf.get('userdata'),
+                                                     repo, manifest_file))
+
+        imports = []
+        for project in data.get('projects') or []:
+            name = project.get('name')
+            # The first definition of a project wins, west ignores
+            # imports of later definitions.
+            if name in defined:
+                continue
+            defined.add(name)
+            if project.get('import') and name in active:
+                imports.append((Path(active[name].abspath), project['import']))
+
+        for project_repo, imp in imports:
+            for sub_file in _west_import_files(project_repo, imp):
+                collect(sub_file, project_repo)
+
+    collect(west_projs['manifest_path'], Path(projects[0].abspath))
+    return list(dict.fromkeys(extra_modules))
+
+
 def parse_modules(zephyr_base, manifest=None, west_projs=None, modules=None,
                   extra_modules=None, require_yaml_validation=True):
 
+    manifest_extra_modules = []
     if modules is None:
         west_projs = west_projs or west_projects(manifest)
         modules = ([p.posixpath for p in west_projs['projects']]
                    if west_projs else [])
+        manifest_extra_modules = west_extra_modules(west_projs)
 
     if extra_modules is None:
         extra_modules = []
@@ -766,6 +862,11 @@ def parse_modules(zephyr_base, manifest=None, west_projs=None, modules=None,
             if not extra_module:
                 continue
             extra_modules.extend(PurePosixPath(p) for p in extra_module.split(';') if p)
+
+    # Extra modules from the west manifest come first, then those given
+    # through CMake or the environment, without duplicates.
+    extra_modules = list(dict.fromkeys(
+        PurePosixPath(p) for p in manifest_extra_modules + list(extra_modules)))
 
     Module = namedtuple('Module', ['project', 'meta', 'depends'])
 
@@ -788,7 +889,8 @@ def parse_modules(zephyr_base, manifest=None, west_projs=None, modules=None,
             all_modules_by_name[meta['name']] = Module(project, meta, depends)
 
         elif project in extra_modules:
-            sys.exit(f'{project}, given in ZEPHYR_EXTRA_MODULES, '
+            sys.exit(f'{project}, given in ZEPHYR_EXTRA_MODULES or in west '
+                     'manifest self: userdata: zephyr-extra-modules:, '
                      'is not a valid zephyr module')
 
     for module in all_modules_by_name.values():
